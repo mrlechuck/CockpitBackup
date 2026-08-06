@@ -3,8 +3,8 @@
 A [Cockpit](https://cockpit-project.org/) plugin to manage **a separate backup for each
 folder**, each with its own schedule, right from the web interface:
 
-- **Main view**: list of configured backups, with add, edit (folder, time, retention)
-  and remove
+- **Main view**: list of configured backups, with add, edit (title, folder, time,
+  retention) and remove
 - **Per-folder toggle**: each automatic backup can be enabled or disabled individually,
   directly from the list
 - **Per-folder daily time**: each configuration decides when its backup runs; missed
@@ -13,6 +13,9 @@ folder**, each with its own schedule, right from the web interface:
   live output, restore and delete
 - **Restore** to the original location or to an alternate folder
 - **Per-folder retention**: independent number of days to keep
+- **Exclusions**: skip subfolders or file patterns (e.g. `cache`, `*.log`) per backup
+- **Optional title** per backup and a **size calculator** in the add/edit dialog that
+  shows the current folder size with exclusions applied
 
 ## Requirements
 
@@ -82,13 +85,19 @@ folder's configured days (global default for orphaned archives).
     "destination": "/var/backups/cockpit-backup",
     "retention_days": 30,
     "backups": [
-        { "folder": "/etc", "time": "02:00", "retention_days": 30, "enabled": true },
-        { "folder": "/var/www", "time": "03:30", "retention_days": 14, "enabled": false }
+        { "folder": "/etc", "time": "02:00", "retention_days": 30, "enabled": true,
+          "title": "System configuration" },
+        { "folder": "/var/www", "time": "03:30", "retention_days": 14, "enabled": false,
+          "excludes": ["cache", "logs/tmp", "*.log"], "title": "Web sites" }
     ]
 }
 ```
 
 The legacy format with `"folders": [...]` is migrated automatically on first save.
+
+`excludes` entries are passed to `tar --exclude`: paths are relative to the backed-up
+folder (absolute paths work too) and glob wildcards are supported. A matching
+directory is skipped together with its whole content.
 
 ### Command-line usage
 
@@ -97,6 +106,7 @@ sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh backup
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh backup /var/www
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh backup-due
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh list
+sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh estimate /var/www cache '*.log'
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh restore backup-var-www-20260807-020000.tar.gz
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh restore backup-var-www-20260807-020000.tar.gz /tmp/test-restore
 ```

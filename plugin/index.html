@@ -151,6 +151,10 @@
             </div>
             <div class="modal-body">
                 <div class="field">
+                    <label class="field-label" for="config-name">Title <span class="muted">(optional)</span></label>
+                    <input type="text" id="config-name" placeholder="e.g. Web sites" autocomplete="off">
+                </div>
+                <div class="field">
                     <label class="field-label" for="config-folder">Folder to back up</label>
                     <input type="text" id="config-folder" placeholder="/path/to/folder"
                            spellcheck="false" autocomplete="off">
@@ -164,6 +168,16 @@
                         <label class="field-label" for="config-retention">Keep backups for (days)</label>
                         <input type="number" id="config-retention" min="1" max="3650" value="30">
                     </div>
+                </div>
+                <div class="field">
+                    <label class="field-label" for="config-excludes">Exclude from backup <span class="muted">(optional)</span></label>
+                    <textarea id="config-excludes" rows="3" spellcheck="false"
+                              placeholder="cache&#10;logs/tmp&#10;*.log"></textarea>
+                    <p class="field-hint muted">One per line, relative to the folder. Wildcards like <code>*.log</code> are supported.</p>
+                </div>
+                <div class="estimate-row">
+                    <button id="estimate-size" class="btn btn-small">Calculate current size</button>
+                    <span id="estimate-result" class="muted small"></span>
                 </div>
                 <p id="config-error" class="field-error" hidden></p>
             </div>

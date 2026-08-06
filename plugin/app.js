@@ -15,9 +15,9 @@ if (typeof cockpit === "undefined") {
             destination: "/var/backups/cockpit-backup",
             retention_days: 30,
             backups: [
-                { folder: "/etc", time: "02:00", retention_days: 30, enabled: true },
+                { folder: "/etc", time: "02:00", retention_days: 30, enabled: true, title: "System configuration" },
                 { folder: "/home/roberto/documents", time: "01:30", retention_days: 14, enabled: true },
-                { folder: "/var/www", time: "03:00", retention_days: 30, enabled: false }
+                { folder: "/var/www", time: "03:00", retention_days: 30, enabled: false, excludes: ["cache", "*.log"], title: "Web sites" }
             ]
         };
         const now = Math.floor(Date.now() / 1000);
@@ -59,6 +59,12 @@ if (typeof cockpit === "undefined") {
                                 if (i < lines.length) stream(lines[i++] + "\n");
                                 else { clearInterval(t); res(); }
                             }, 350);
+                        }
+                    });
+                if (args[1] === "estimate")
+                    return promiseWith({
+                        run: (res, rej, stream) => {
+                            setTimeout(() => res(JSON.stringify({ bytes: 731906048, files: 3421 })), 800);
                         }
                     });
                 if (args[1] === "restore")
@@ -253,17 +259,20 @@ function configRow(b, idx) {
     main.className = "config-main";
 
     const path = document.createElement("span");
-    path.className = "config-path";
-    path.textContent = b.folder;
+    path.className = b.title ? "config-title" : "config-path";
+    path.textContent = b.title || b.folder;
 
     const meta = document.createElement("span");
     meta.className = "config-meta muted";
     const parts = [];
+    if (b.title) parts.push(b.folder);
     parts.push(b.enabled === false ? "automatic backup off" : "daily at " + entryTime(b));
     parts.push(items.length === 1 ? "1 archive" : items.length + " archives");
     if (items.length) parts.push(formatSize(total));
     parts.push(last ? "last: " + formatAge(last) : "no backups yet");
     parts.push("keeps " + (b.retention_days || config.retention_days) + " days");
+    if (b.excludes && b.excludes.length)
+        parts.push(b.excludes.length === 1 ? "1 exclusion" : b.excludes.length + " exclusions");
     meta.textContent = parts.join(" · ");
 
     main.appendChild(path);
@@ -364,16 +373,21 @@ function renderDetailView(folder) {
         return;
     }
 
-    $("detail-title").textContent = isOther ? "Other archives" : folder;
+    const heading = isOther ? "Other archives" : ((entry && entry.title) || folder);
+    $("detail-title").textContent = heading;
+    $("detail-title").classList.toggle("mono-title", !isOther && !(entry && entry.title));
     $("detail-backup-card").hidden = isOther || !entry;
 
     const items = archivesFor(folder);
     const total = items.reduce((s, a) => s + a.size, 0);
     const parts = [];
+    if (entry && entry.title) parts.push(folder);
     if (entry) parts.push(entry.enabled === false ? "automatic backup off" : "daily at " + entryTime(entry));
     parts.push(items.length === 1 ? "1 archive" : items.length + " archives");
     if (items.length) parts.push(formatSize(total) + " total");
     if (entry) parts.push("keeps " + (entry.retention_days || config.retention_days) + " days");
+    if (entry && entry.excludes && entry.excludes.length)
+        parts.push("excludes: " + entry.excludes.join(", "));
     if (isOther) parts.push("from folders no longer configured");
     $("detail-sub").textContent = parts.join(" · ");
 
@@ -441,11 +455,16 @@ function saveConfigFile() {
 function openConfigDialog(idx) {
     editingIndex = idx;
     $("config-title").textContent = idx === -1 ? "Add backup" : "Edit backup";
+    $("config-name").value = idx === -1 ? "" : (config.backups[idx].title || "");
     $("config-folder").value = idx === -1 ? "" : config.backups[idx].folder;
     $("config-time").value = idx === -1 ? DEFAULT_TIME : entryTime(config.backups[idx]);
     $("config-retention").value = idx === -1
         ? config.retention_days
         : (config.backups[idx].retention_days || config.retention_days);
+    $("config-excludes").value = idx === -1
+        ? ""
+        : (config.backups[idx].excludes || []).join("\n");
+    $("estimate-result").textContent = "";
     showConfigError(null);
     openModal("config-dialog");
     $("config-folder").focus();
@@ -458,9 +477,14 @@ function showConfigError(msg) {
 }
 
 function saveConfigEntry() {
+    const title = $("config-name").value.trim();
     const folder = $("config-folder").value.trim().replace(/\/+$/, "") || $("config-folder").value.trim();
     const time = $("config-time").value || DEFAULT_TIME;
     const retention = Math.max(1, parseInt($("config-retention").value, 10) || config.retention_days);
+    const excludes = $("config-excludes").value
+        .split("\n")
+        .map(l => l.trim())
+        .filter(l => l.length > 0);
 
     if (!folder || !folder.startsWith("/")) {
         showConfigError("Enter an absolute path, starting with /");
@@ -476,10 +500,19 @@ function saveConfigEntry() {
         return;
     }
 
-    if (editingIndex === -1)
-        config.backups.push({ folder, time, retention_days: retention });
-    else
-        config.backups[editingIndex] = { ...config.backups[editingIndex], folder, time, retention_days: retention };
+    if (editingIndex === -1) {
+        const entry = { folder, time, retention_days: retention };
+        if (title) entry.title = title;
+        if (excludes.length) entry.excludes = excludes;
+        config.backups.push(entry);
+    } else {
+        const entry = { ...config.backups[editingIndex], folder, time, retention_days: retention };
+        if (title) entry.title = title;
+        else delete entry.title;
+        if (excludes.length) entry.excludes = excludes;
+        else delete entry.excludes;
+        config.backups[editingIndex] = entry;
+    }
 
     const btn = $("config-save");
     setLoading(btn, true);
@@ -509,6 +542,38 @@ function toggleEntry(idx, enabled) {
             toast("Failed to save: " + errText(err), "danger");
             renderListView();
         });
+}
+
+function estimateSize() {
+    const folder = $("config-folder").value.trim().replace(/\/+$/, "") || $("config-folder").value.trim();
+    if (!folder || !folder.startsWith("/")) {
+        showConfigError("Enter an absolute path first, then calculate the size");
+        return;
+    }
+    showConfigError(null);
+    const excludes = $("config-excludes").value
+        .split("\n")
+        .map(l => l.trim())
+        .filter(l => l.length > 0);
+
+    const btn = $("estimate-size");
+    const result = $("estimate-result");
+    setLoading(btn, true);
+    result.textContent = "Calculating…";
+
+    cockpit.spawn([HELPER, "estimate", folder].concat(excludes),
+        { superuser: "try", err: "message" })
+        .then(out => {
+            const data = JSON.parse(out);
+            result.textContent = "≈ " + formatSize(data.bytes) + " · " +
+                data.files.toLocaleString("en-US") + " files" +
+                (excludes.length ? " (exclusions applied)" : "");
+        })
+        .catch(err => {
+            result.textContent = "";
+            showConfigError("Could not calculate size: " + errText(err));
+        })
+        .finally(() => setLoading(btn, false));
 }
 
 function openConfigDeleteDialog(idx) {
@@ -690,6 +755,7 @@ document.addEventListener("DOMContentLoaded", () => {
     $("config-folder").addEventListener("keydown", ev => { if (ev.key === "Enter") saveConfigEntry(); });
     $("config-folder").addEventListener("input", () => showConfigError(null));
     $("config-delete-confirm").addEventListener("click", confirmConfigDelete);
+    $("estimate-size").addEventListener("click", estimateSize);
     $("save-settings").addEventListener("click", saveSettings);
 
     // Detail view

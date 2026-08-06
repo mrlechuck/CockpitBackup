@@ -10,7 +10,7 @@
 #   delete ARCHIVE            delete an archive
 set -euo pipefail
 
-CONFIG=/etc/cockpit-backup/config.json
+CONFIG="${COCKPIT_BACKUP_CONFIG:-/etc/cockpit-backup/config.json}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -24,6 +24,18 @@ key, default = sys.argv[2], sys.argv[3]
 val = cfg.get(key, default)
 print(val)
 ' "$CONFIG" "$1" "$2"
+}
+
+cfg_excludes() {
+    python3 -c '
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for b in cfg.get("backups", []):
+    if b["folder"] == sys.argv[2]:
+        for e in b.get("excludes", []):
+            print(e)
+        break
+' "$CONFIG" "$1"
 }
 
 cfg_folders() {
@@ -59,12 +71,28 @@ archive_path() {
 
 backup_one() {
     local folder="$1" stamp="$2"
-    local slug archive
+    local slug archive rel
     slug=$(printf '%s' "${folder#/}" | tr -c 'A-Za-z0-9._-' '-')
     archive="$DEST/backup-$slug-$stamp.tar.gz"
+    rel="${folder#/}"
+
+    # Per-folder exclusions: relative to the folder (or absolute), globs allowed.
+    # Archive members are relative to /, so patterns are rebased accordingly.
+    local -a tar_args=()
+    local ex member
+    while IFS= read -r ex; do
+        [ -n "$ex" ] || continue
+        case "$ex" in
+            /*) member="${ex#/}" ;;
+            *)  member="$rel/$ex" ;;
+        esac
+        tar_args+=("--exclude=$member")
+        echo "  Excluding: $ex"
+    done < <(cfg_excludes "$folder")
 
     echo "Backing up $folder"
-    tar -czf "$archive" -C / "${folder#/}" 2> >(grep -v 'Removing leading' >&2 || true)
+    tar -czf "$archive" ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
+        2> >(grep -v 'Removing leading' >&2 || true)
     echo "  Archive: $archive"
     echo "  Size: $(du -h "$archive" | cut -f1)"
 
@@ -200,6 +228,52 @@ EOF
     [ "$count" -eq 0 ] || prune
 }
 
+# Size of a folder honoring exclude patterns (same semantics as the backup).
+# Args: FOLDER [PATTERN...] — patterns relative to FOLDER or absolute, globs allowed.
+cmd_estimate() {
+    local folder="${1:-}"
+    [ -n "$folder" ] || die "usage: estimate FOLDER [PATTERN...]"
+    case "$folder" in
+        /*) ;;
+        *) die "folder must be an absolute path" ;;
+    esac
+    [ -e "$folder" ] || die "folder not found: $folder"
+    shift
+    python3 - "$folder" "$@" <<'EOF'
+import os, sys, fnmatch, json
+
+folder = sys.argv[1].rstrip("/") or "/"
+patterns = []
+for p in sys.argv[2:]:
+    if p.startswith("/"):
+        if p == folder or p.startswith(folder + "/"):
+            p = p[len(folder) + 1:]
+        else:
+            continue  # absolute pattern outside the folder: never matches
+    patterns.append(p.rstrip("/"))
+
+def excluded(rel, name):
+    return any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(name, p) for p in patterns)
+
+total = files = 0
+for root, dirs, names in os.walk(folder):
+    relroot = os.path.relpath(root, folder)
+    def rel(n):
+        return n if relroot == "." else relroot + "/" + n
+    dirs[:] = [d for d in dirs if not excluded(rel(d), d)]
+    for n in names:
+        if excluded(rel(n), n):
+            continue
+        try:
+            st = os.lstat(os.path.join(root, n))
+        except OSError:
+            continue
+        total += st.st_size
+        files += 1
+print(json.dumps({"bytes": total, "files": files}))
+EOF
+}
+
 cmd_list() {
     python3 -c '
 import json, os, glob, sys
@@ -257,10 +331,11 @@ case "${1:-}" in
     backup)      shift; cmd_backup "${1:-}" ;;
     backup-due)  cmd_backup_due ;;
     list)        cmd_list ;;
+    estimate)    shift; cmd_estimate "$@" ;;
     restore)     shift; cmd_restore "$@" ;;
     delete)      shift; cmd_delete "$@" ;;
     *)
-        echo "Usage: $0 {backup [FOLDER]|backup-due|list|restore ARCHIVE [TARGET]|delete ARCHIVE}" >&2
+        echo "Usage: $0 {backup [FOLDER]|backup-due|list|estimate FOLDER [PATTERN...]|restore ARCHIVE [TARGET]|delete ARCHIVE}" >&2
         exit 2
         ;;
 esac

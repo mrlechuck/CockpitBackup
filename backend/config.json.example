@@ -2,7 +2,9 @@
     "destination": "/var/backups/cockpit-backup",
     "retention_days": 30,
     "backups": [
-        { "folder": "/etc", "time": "02:00", "retention_days": 30 },
-        { "folder": "/var/www", "time": "03:30", "retention_days": 14 }
+        { "folder": "/etc", "time": "02:00", "retention_days": 30,
+          "title": "System configuration" },
+        { "folder": "/var/www", "time": "03:30", "retention_days": 14,
+          "excludes": ["cache", "logs/tmp", "*.log"], "title": "Web sites" }
     ]
 }
