@@ -1,0 +1,10 @@
+[Unit]
+Description=Per-folder daily backup checks (Cockpit plugin)
+
+[Timer]
+# Every 10 minutes: the service backs up only the folders whose daily time has passed
+OnCalendar=*:0/10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

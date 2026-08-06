@@ -1,0 +1,9 @@
+[Unit]
+Description=Per-folder daily backups (Cockpit plugin)
+Wants=cockpit-backup.timer
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/cockpit-backup/cockpit-backup.sh backup-due
+Nice=10
+IOSchedulingClass=idle

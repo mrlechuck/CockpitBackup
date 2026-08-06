@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Backup</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+    <script src="../base1/cockpit.js"></script>
+</head>
+<body>
+    <div id="app">
+
+        <!-- ===================== LIST VIEW ===================== -->
+        <div id="view-list">
+            <header class="page-header">
+                <div>
+                    <h1>Folder backup</h1>
+                    <p class="subtitle">Automatic daily backups with restore, right from Cockpit</p>
+                </div>
+            </header>
+
+            <!-- Shown only when the systemd timer engine is not running -->
+            <div id="timer-warning" class="alert alert-warning page-alert" hidden>
+                <strong>Automatic backups are not running:</strong> the systemd timer is missing
+                or disabled. Run <code>install.sh</code> on the server, or:
+                <code>systemctl enable --now cockpit-backup.timer</code>
+            </div>
+
+            <!-- Global settings -->
+            <section class="card">
+                <h2 class="card-title">
+                    <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 10.5A2.5 2.5 0 1 1 8 5.5a2.5 2.5 0 0 1 0 5Zm6.3-1.4.9-.7a.5.5 0 0 0 .12-.64l-1.2-2.08a.5.5 0 0 0-.61-.22l-1.06.43a5.5 5.5 0 0 0-1.03-.6l-.16-1.13A.5.5 0 0 0 10.77 3H8.37a.5.5 0 0 0-.5.43l-.16 1.13c-.36.16-.7.36-1.02.6l-1.06-.43a.5.5 0 0 0-.61.22L3.82 7.03a.5.5 0 0 0 .12.64l.9.7a5.6 5.6 0 0 0 0 1.26l-.9.7a.5.5 0 0 0-.12.64l1.2 2.08c.13.22.4.31.61.22l1.06-.43c.32.24.66.44 1.02.6l.16 1.13c.04.25.25.43.5.43h2.4a.5.5 0 0 0 .5-.43l.16-1.13c.36-.16.7-.36 1.03-.6l1.06.43c.22.09.48 0 .6-.22l1.2-2.08a.5.5 0 0 0-.11-.64l-.9-.7a5.6 5.6 0 0 0 0-1.26Z"/></svg>
+                    Settings
+                </h2>
+                <div class="settings-grid">
+                    <div class="field">
+                        <label class="field-label" for="destination">Backup destination</label>
+                        <input type="text" id="destination" placeholder="/var/backups/cockpit-backup"
+                               spellcheck="false" autocomplete="off">
+                    </div>
+                </div>
+                <div class="card-footer">
+                    <button id="save-settings" class="btn btn-primary">Save settings</button>
+                </div>
+            </section>
+
+            <!-- Configured backups -->
+            <section class="card">
+                <div class="card-header">
+                    <h2 class="card-title">
+                        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1.5 3.25A1.75 1.75 0 0 1 3.25 1.5h2.69c.46 0 .9.18 1.23.51l.82.82c.05.05.11.08.18.08h4.58A1.75 1.75 0 0 1 14.5 4.66v7.59a1.75 1.75 0 0 1-1.75 1.75H3.25a1.75 1.75 0 0 1-1.75-1.75v-9Z"/></svg>
+                        Configured backups
+                        <span id="config-count" class="badge badge-count" hidden></span>
+                    </h2>
+                    <button id="add-config" class="btn btn-primary btn-small">
+                        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 2a.75.75 0 0 1 .75.75v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5A.75.75 0 0 1 8 2Z"/></svg>
+                        Add backup
+                    </button>
+                </div>
+
+                <div id="config-loading" class="empty-state">
+                    <div class="spinner"></div>
+                    <p class="muted">Loading…</p>
+                </div>
+
+                <div id="config-empty" class="empty-state" hidden>
+                    <svg class="empty-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1.5 3.25A1.75 1.75 0 0 1 3.25 1.5h2.69c.46 0 .9.18 1.23.51l.82.82c.05.05.11.08.18.08h4.58A1.75 1.75 0 0 1 14.5 4.66v7.59a1.75 1.75 0 0 1-1.75 1.75H3.25a1.75 1.75 0 0 1-1.75-1.75v-9Z" opacity=".35"/></svg>
+                    <p><strong>No backups configured</strong></p>
+                    <p class="muted">Add a folder to start backing it up daily.</p>
+                </div>
+
+                <ul id="config-list" class="config-list" hidden></ul>
+            </section>
+        </div>
+
+        <!-- ===================== DETAIL VIEW ===================== -->
+        <div id="view-detail" hidden>
+            <header class="page-header">
+                <button id="back-btn" class="btn btn-plain back-btn">
+                    <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M9.78 3.22a.75.75 0 0 1 0 1.06L6.06 8l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"/></svg>
+                    All backups
+                </button>
+                <div class="detail-heading">
+                    <h1 id="detail-title" class="mono-title"></h1>
+                    <p id="detail-sub" class="subtitle"></p>
+                </div>
+            </header>
+
+            <!-- Manual backup -->
+            <section class="card" id="detail-backup-card">
+                <div class="auto-row">
+                    <div>
+                        <h2>Manual backup</h2>
+                        <p class="muted">Runs a backup of this folder right away.</p>
+                    </div>
+                    <button id="detail-backup-now" class="btn btn-primary">Backup now</button>
+                </div>
+                <div id="backup-console" class="console" hidden>
+                    <div class="console-bar">
+                        <span>Output</span>
+                        <button id="backup-console-close" class="console-close" title="Close">✕</button>
+                    </div>
+                    <pre id="backup-output" class="console-body"></pre>
+                </div>
+            </section>
+
+            <!-- Archives -->
+            <section class="card">
+                <div class="card-header">
+                    <h2 class="card-title">
+                        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v1A1.5 1.5 0 0 1 12.5 6h-9A1.5 1.5 0 0 1 2 4.5v-1ZM2 8a1.5 1.5 0 0 1 1.5-1.5h9A1.5 1.5 0 0 1 14 8v1a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 9V8Zm1.5 3A1.5 1.5 0 0 0 2 12.5v1A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5v-1a1.5 1.5 0 0 0-1.5-1.5h-9Z"/></svg>
+                        Archives
+                        <span id="archive-count" class="badge badge-count" hidden></span>
+                    </h2>
+                    <button id="refresh-list" class="btn btn-plain" title="Refresh list">
+                        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M13.65 2.35a.75.75 0 0 0-1.28.53v1.4A6 6 0 1 0 14 8a.75.75 0 0 0-1.5 0 4.5 4.5 0 1 1-1.32-3.18l-1.55 1.55a.75.75 0 0 0 .53 1.28h3.09a.75.75 0 0 0 .75-.75V3.81a.75.75 0 0 0-.22-.53l-.13-.93Z"/></svg>
+                        Refresh
+                    </button>
+                </div>
+
+                <div id="list-empty" class="empty-state" hidden>
+                    <svg class="empty-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a5 5 0 0 0-4.9 4.03A3.75 3.75 0 0 0 3.75 12.5h8.5a3.25 3.25 0 0 0 .53-6.46A5 5 0 0 0 8 1Z" opacity=".35"/></svg>
+                    <p><strong>No backups yet</strong></p>
+                    <p class="muted">Run a manual backup or wait for the daily one.</p>
+                </div>
+
+                <div id="list-table-wrap" class="table-wrap" hidden>
+                    <table class="backup-table">
+                        <thead>
+                            <tr>
+                                <th>Archive</th>
+                                <th>Date</th>
+                                <th>Age</th>
+                                <th class="col-right">Size</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="backup-rows"></tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Add / edit configuration modal -->
+    <div id="config-dialog" class="modal-backdrop" hidden>
+        <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="config-title">
+            <div class="modal-header">
+                <h2 id="config-title">Add backup</h2>
+                <button class="modal-close" data-close="config-dialog" title="Close">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label class="field-label" for="config-folder">Folder to back up</label>
+                    <input type="text" id="config-folder" placeholder="/path/to/folder"
+                           spellcheck="false" autocomplete="off">
+                </div>
+                <div class="field-grid-2">
+                    <div class="field">
+                        <label class="field-label" for="config-time">Daily backup time</label>
+                        <input type="time" id="config-time" value="02:00">
+                    </div>
+                    <div class="field">
+                        <label class="field-label" for="config-retention">Keep backups for (days)</label>
+                        <input type="number" id="config-retention" min="1" max="3650" value="30">
+                    </div>
+                </div>
+                <p id="config-error" class="field-error" hidden></p>
+            </div>
+            <div class="modal-footer">
+                <button id="config-save" class="btn btn-primary">Save</button>
+                <button class="btn btn-link" data-close="config-dialog">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete configuration modal -->
+    <div id="config-delete-dialog" class="modal-backdrop" hidden>
+        <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="config-delete-title">
+            <div class="modal-header">
+                <h2 id="config-delete-title">Remove backup</h2>
+                <button class="modal-close" data-close="config-delete-dialog" title="Close">✕</button>
+            </div>
+            <div class="modal-body">
+                <p>Stop backing up this folder?</p>
+                <p class="archive-chip" id="config-delete-name"></p>
+                <p class="muted small">Existing archives are kept and remain restorable from the “Other archives” section.</p>
+            </div>
+            <div class="modal-footer">
+                <button id="config-delete-confirm" class="btn btn-danger">Remove</button>
+                <button class="btn btn-link" data-close="config-delete-dialog">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Restore modal -->
+    <div id="restore-dialog" class="modal-backdrop" hidden>
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title">
+            <div class="modal-header">
+                <h2 id="restore-title">Restore backup</h2>
+                <button class="modal-close" data-close="restore-dialog" title="Close">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="archive-chip" id="restore-archive-name"></p>
+
+                <label class="choice" for="mode-original">
+                    <input type="radio" name="restore-mode" value="original" id="mode-original" checked>
+                    <span class="choice-body">
+                        <span class="choice-title">Original location</span>
+                        <span class="choice-desc">Files from the archive overwrite the existing ones. Files created after the backup are left untouched.</span>
+                        <span id="restore-paths" class="restore-paths" hidden></span>
+                    </span>
+                </label>
+
+                <label class="choice" for="mode-custom">
+                    <input type="radio" name="restore-mode" value="custom" id="mode-custom">
+                    <span class="choice-body">
+                        <span class="choice-title">Alternate folder</span>
+                        <span class="choice-desc">Extracts everything into a folder of your choice, leaving the original files untouched. Useful for recovering individual files.</span>
+                        <input type="text" id="restore-target" placeholder="/tmp/restore" disabled
+                               spellcheck="false" autocomplete="off">
+                    </span>
+                </label>
+
+                <div id="restore-warning" class="alert alert-warning">
+                    <strong>Warning:</strong> restoring to the original location overwrites existing files.
+                </div>
+
+                <div id="restore-console" class="console" hidden>
+                    <pre id="restore-output" class="console-body"></pre>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="restore-confirm" class="btn btn-danger">Restore</button>
+                <button class="btn btn-link" data-close="restore-dialog">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete archive modal -->
+    <div id="delete-dialog" class="modal-backdrop" hidden>
+        <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+            <div class="modal-header">
+                <h2 id="delete-title">Delete archive</h2>
+                <button class="modal-close" data-close="delete-dialog" title="Close">✕</button>
+            </div>
+            <div class="modal-body">
+                <p>Permanently delete this archive?</p>
+                <p class="archive-chip" id="delete-archive-name"></p>
+                <p class="muted small">This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button id="delete-confirm" class="btn btn-danger">Delete</button>
+                <button class="btn btn-link" data-close="delete-dialog">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toasts -->
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
