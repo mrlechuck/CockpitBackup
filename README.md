@@ -1,83 +1,81 @@
-# Cockpit Backup — plugin backup cartelle
+# Cockpit Backup — folder backup plugin
 
-Plugin per [Cockpit](https://cockpit-project.org/) che permette, dall'interfaccia web,
-di gestire **un backup separato per ogni cartella**, ognuno col proprio orario:
+A [Cockpit](https://cockpit-project.org/) plugin to manage **a separate backup for each
+folder**, each with its own schedule, right from the web interface:
 
-- **Schermata principale**: elenco dei backup configurati, con aggiunta, modifica
-  (cartella, orario, retention) e rimozione delle configurazioni
-- **Interruttore per cartella**: ogni backup automatico si attiva o disattiva
-  singolarmente, direttamente dalla lista
-- **Orario giornaliero per cartella**: ogni configurazione decide quando parte
-  il suo backup; i backup persi (server spento) partono al primo controllo utile
-- **Pagina di dettaglio** per ogni cartella: archivi con data e dimensione, backup
-  manuale con output in tempo reale, restore ed eliminazione
-- **Restore** nella posizione originale o in una cartella alternativa
-- **Retention per cartella**: giorni di conservazione indipendenti
+- **Main view**: list of configured backups, with add, edit (folder, time, retention)
+  and remove
+- **Per-folder toggle**: each automatic backup can be enabled or disabled individually,
+  directly from the list
+- **Per-folder daily time**: each configuration decides when its backup runs; missed
+  backups (server off) run at the first useful check
+- **Detail view** for each folder: archives with date and size, manual backup with
+  live output, restore and delete
+- **Restore** to the original location or to an alternate folder
+- **Per-folder retention**: independent number of days to keep
 
-## Requisiti
+## Requirements
 
-- Linux con Cockpit installato (Debian/Ubuntu: `apt install cockpit` — Fedora/RHEL: `dnf install cockpit`)
-- `python3`, `tar`, `systemd` (presenti di serie su tutte le distro moderne)
+- Linux with Cockpit installed (Debian/Ubuntu: `apt install cockpit` — Fedora/RHEL: `dnf install cockpit`)
+- `python3`, `tar`, `systemd` (preinstalled on every modern distro)
 
-## Installazione
+## Installation
 
-Copia questa cartella sul server Linux, poi:
+Copy this folder to your Linux server, then:
 
 ```bash
 sudo ./install.sh
 ```
 
-Apri Cockpit su `https://<ip-del-server>:9090`, accedi e trova **Backup** nel menu laterale.
-Per le operazioni serve la modalità amministrativa (pulsante "Accesso limitato / Turn on
-administrative access" in alto).
+Open Cockpit at `https://<server-ip>:9090`, log in and find **Backup** in the side menu.
+Operations require administrative access (the "Limited access / Turn on administrative
+access" button at the top).
 
-## Primo utilizzo
+## First use
 
-1. In **Settings** imposta la cartella di destinazione, poi **Save settings**
-2. Clicca **Add backup**: cartella (percorso assoluto), orario giornaliero e giorni di retention
-3. Il backup automatico è attivo da subito; puoi disattivarlo con l'interruttore sulla riga
-4. (Facoltativo) Entra nel dettaglio della cartella e prova **Backup now**
+1. In **Settings** set the destination folder, then **Save settings**
+2. Click **Add backup**: folder (absolute path), daily time and retention days
+3. The automatic backup is active right away; you can disable it with the toggle on the row
+4. (Optional) Open the folder's detail view and try **Backup now**
 
-## Come funziona
+## How it works
 
-| Componente | Percorso |
+| Component | Path |
 |---|---|
-| Frontend Cockpit | `/usr/share/cockpit/backup/` |
-| Script backend | `/usr/local/libexec/cockpit-backup/cockpit-backup.sh` |
-| Configurazione | `/etc/cockpit-backup/config.json` |
-| Unit systemd | `cockpit-backup.service` + `cockpit-backup.timer` |
-| Archivi | `backup-<cartella>-AAAAMMGG-HHMMSS.tar.gz` + sidecar `.meta` |
+| Cockpit frontend | `/usr/share/cockpit/backup/` |
+| Backend script | `/usr/local/libexec/cockpit-backup/cockpit-backup.sh` |
+| Configuration | `/etc/cockpit-backup/config.json` |
+| systemd units | `cockpit-backup.service` + `cockpit-backup.timer` |
+| Archives | `backup-<folder>-YYYYMMDD-HHMMSS.tar.gz` + `.meta` sidecar |
 
-### Pianificazione per cartella
+### Per-folder scheduling
 
-Il timer systemd si attiva **ogni 10 minuti** ed esegue `backup-due`, che controlla
-quali cartelle sono "in scadenza": una cartella è dovuta quando il suo orario
-giornaliero è passato e l'archivio più recente è precedente a quell'orario.
-In questo modo:
+The systemd timer fires **every 10 minutes** and runs `backup-due`, which checks
+which folders are due: a folder is due when its daily time has passed and its newest
+archive is older than that scheduled moment. This means:
 
-- ogni cartella parte al proprio orario (con al massimo ~10 minuti di ritardo)
-- se il server era spento all'orario previsto, il backup parte al primo controllo
-  dopo l'avvio (stile anacron)
-- un backup manuale conta come backup del giorno: quello automatico non si ripete
+- each folder starts at its own time (with at most ~10 minutes of delay)
+- if the server was off at the scheduled time, the backup runs at the first check
+  after boot (anacron-style)
+- a manual backup counts as the day's backup: the automatic one does not repeat
 
-Il timer viene abilitato da `install.sh` ed è il motore di tutte le pianificazioni:
-l'attivazione/disattivazione per cartella si fa dall'interfaccia (campo `enabled`
-nella configurazione). Se il timer non è attivo, la UI mostra un avviso.
+The timer is enabled by `install.sh` and is the engine behind all schedules:
+per-folder enabling/disabling is done from the UI (the `enabled` field in the
+configuration). If the timer is not running, the UI shows a warning.
 
-### Archivi
+### Archives
 
-Ogni esecuzione crea **un archivio per cartella** (es. `backup-var-www-20260807-020000.tar.gz`).
-Accanto a ogni archivio c'è un file `.meta` con il percorso originale, usato dalla UI
-per il raggruppamento e per mostrare dove verrà fatto il restore. Gli archivi sono
-normali `tar.gz` con percorsi relativi a `/`: ripristinabili anche a mano
-(`tar -xzf archivio.tar.gz -C /`), senza dipendere dal plugin.
+Each run creates **one archive per folder** (e.g. `backup-var-www-20260807-020000.tar.gz`).
+Next to each archive there is a `.meta` file with the original path, used by the UI
+for grouping and to show where the restore will go. Archives are plain `tar.gz` files
+with paths relative to `/`: they can also be restored by hand
+(`tar -xzf archive.tar.gz -C /`), without depending on the plugin.
 
-Se rimuovi una configurazione, i suoi archivi **non** vengono eliminati: restano
-visibili nella sezione "Other archives" e sono ancora ripristinabili. La pulizia
-retention usa i giorni configurati per ciascuna cartella (default globale per gli
-archivi orfani).
+If you remove a configuration, its archives are **not** deleted: they remain visible
+in the "Other archives" section and can still be restored. Retention cleanup uses each
+folder's configured days (global default for orphaned archives).
 
-### Formato configurazione
+### Configuration format
 
 ```json
 {
@@ -90,9 +88,9 @@ archivi orfani).
 }
 ```
 
-Il vecchio formato con `"folders": [...]` viene migrato automaticamente al primo salvataggio.
+The legacy format with `"folders": [...]` is migrated automatically on first save.
 
-### Uso da riga di comando
+### Command-line usage
 
 ```bash
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh backup
@@ -100,20 +98,20 @@ sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh backup /var/www
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh backup-due
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh list
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh restore backup-var-www-20260807-020000.tar.gz
-sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh restore backup-var-www-20260807-020000.tar.gz /tmp/prova-restore
+sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh restore backup-var-www-20260807-020000.tar.gz /tmp/test-restore
 ```
 
-## Disinstallazione
+## Uninstall
 
 ```bash
 sudo ./uninstall.sh
 ```
 
-Configurazione e archivi esistenti **non** vengono eliminati.
+Existing configuration and archives are **not** deleted.
 
-## Note
+## Notes
 
-- Il restore nella posizione originale **sovrascrive** i file esistenti (i file creati
-  dopo il backup non vengono toccati).
-- La destinazione dei backup dovrebbe stare su un disco diverso da quello dei dati
-  (o essere sincronizzata altrove) per essere un backup vero.
+- Restoring to the original location **overwrites** existing files (files created
+  after the backup are left untouched).
+- The backup destination should live on a different disk than the data (or be synced
+  elsewhere) to be a real backup.
