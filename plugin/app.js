@@ -349,9 +349,11 @@ function archivesFor(folder) {
 
 /* ---------- List view ---------- */
 
+let destDirty = false;
+
 function renderListView() {
     const destInput = $("destination");
-    if (document.activeElement !== destInput)   // don't clobber while typing
+    if (!destDirty && document.activeElement !== destInput)   // don't clobber edits
         destInput.value = config.destination;
     renderS3();
     checkTimerEngine();
@@ -836,7 +838,10 @@ function saveSettings() {
     const btn = $("save-settings");
     setLoading(btn, true);
     saveConfigFile()
-        .then(() => toast("Settings saved", "success"))
+        .then(() => {
+            destDirty = false;
+            toast("Settings saved", "success");
+        })
         .catch(err => toast("Failed to save: " + errText(err), "danger"))
         .finally(() => setLoading(btn, false));
 }
@@ -845,26 +850,26 @@ function saveSettings() {
 
 const S3_FIELD_IDS = ["s3-bucket", "s3-region", "s3-access-key", "s3-secret-key", "s3-prefix", "s3-endpoint"];
 
+// True while the S3 form has unsaved edits: the periodic refresh must never
+// overwrite what the user is typing (cleared on save)
+let s3Dirty = false;
+
 function s3Ready() {
     return !!(config.s3 && config.s3.enabled && config.s3.bucket);
 }
 
-function setIfNotFocused(id, value) {
-    const el = $(id);
-    if (document.activeElement !== el)
-        el.value = value;
-}
-
 function renderS3() {
     const s3 = config.s3 || {};
-    if (document.activeElement !== $("s3-enabled"))
+    const editing = S3_FIELD_IDS.some(id => document.activeElement === $(id));
+    if (!s3Dirty && !editing) {
         $("s3-enabled").checked = !!s3.enabled;
-    setIfNotFocused("s3-bucket", s3.bucket || "");
-    setIfNotFocused("s3-region", s3.region || "");
-    setIfNotFocused("s3-access-key", s3.access_key || "");
-    setIfNotFocused("s3-secret-key", s3.secret_key || "");
-    setIfNotFocused("s3-prefix", s3.prefix || "");
-    setIfNotFocused("s3-endpoint", s3.endpoint || "");
+        $("s3-bucket").value = s3.bucket || "";
+        $("s3-region").value = s3.region || "";
+        $("s3-access-key").value = s3.access_key || "";
+        $("s3-secret-key").value = s3.secret_key || "";
+        $("s3-prefix").value = s3.prefix || "";
+        $("s3-endpoint").value = s3.endpoint || "";
+    }
     const badge = $("s3-badge");
     badge.textContent = s3Ready() ? "Enabled" : "Disabled";
     badge.className = "badge " + (s3Ready() ? "badge-on" : "badge-off");
@@ -897,6 +902,7 @@ function saveS3(showToast) {
     setLoading(btn, true);
     return saveConfigFile()
         .then(() => {
+            s3Dirty = false;
             if (showToast !== false) toast("S3 settings saved", "success");
             renderS3();
         })
@@ -1134,6 +1140,9 @@ document.addEventListener("DOMContentLoaded", () => {
     $("save-s3").addEventListener("click", () => saveS3());
     $("test-s3").addEventListener("click", testS3);
     $("s3-enabled").addEventListener("change", () => saveS3());
+    S3_FIELD_IDS.forEach(id =>
+        $(id).addEventListener("input", () => { s3Dirty = true; }));
+    $("destination").addEventListener("input", () => { destDirty = true; });
 
     // Detail view
     $("back-btn").addEventListener("click", () => goTo(null));
@@ -1167,17 +1176,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
     window.addEventListener("hashchange", render);
 
+    // Disk free space is rounded in the signature (100 MB steps): tiny
+    // fluctuations must not trigger a full re-render every poll
+    function listSig() {
+        return JSON.stringify({
+            a: archives, r: running,
+            d: disk ? Math.round(disk.free / 1e8) : null
+        });
+    }
     let lastSig = "";
     function renderIfChanged() {
-        const sig = JSON.stringify({ a: archives, r: running, d: disk });
-        if (sig !== lastSig) {
-            lastSig = sig;
+        if (listSig() !== lastSig) {
+            lastSig = listSig();
             render();
         }
     }
 
     Promise.all([loadConfig(), refreshArchives()]).then(() => {
-        lastSig = JSON.stringify({ a: archives, r: running, d: disk });
+        lastSig = listSig();
         render();
     });
 
