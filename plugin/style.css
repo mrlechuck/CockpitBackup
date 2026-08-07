@@ -357,6 +357,7 @@ select { cursor: pointer; }
 /* Storage badge on archive rows */
 .storage-badge {
     display: inline-block;
+    white-space: nowrap;
     margin-left: 0.5rem;
     padding: 0.05rem 0.5rem;
     border-radius: 999px;
@@ -549,6 +550,75 @@ select { cursor: pointer; }
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- Mobile ---------- */
+
+@media (max-width: 720px) {
+    #app { padding: 1rem 0.7rem 3rem; }
+    .card { padding: 0.9rem 0.9rem; }
+    .page-header h1 { font-size: 1.3rem; }
+    .mono-title { font-size: 1.15rem; }
+
+    /* Single-column form grids (modal + S3 card) */
+    .field-grid-2 { grid-template-columns: 1fr; }
+
+    /* Config rows stack: info on top, stats + actions on a second line */
+    .config-row {
+        flex-wrap: wrap;
+        gap: 0.3rem;
+    }
+    .config-main { flex: 1 1 100%; }
+    .config-actions {
+        width: 100%;
+        justify-content: flex-end;
+        margin-top: 0.35rem;
+    }
+    .config-stats {
+        margin-right: auto;      /* stats on the left, buttons on the right */
+        align-items: flex-start;
+        min-width: 0;
+        text-align: left;
+    }
+
+    /* Archive table becomes stacked cards: name, then date+size, then actions */
+    .backup-table thead { display: none; }
+    .backup-table,
+    .backup-table tbody { display: block; width: 100%; }
+    .backup-table tbody tr {
+        display: block;
+        padding: 0.55rem 0;
+        border-bottom: 1px solid var(--border-light);
+    }
+    .backup-table tbody td {
+        display: block;
+        border: none;
+        padding: 0.1rem 0;
+    }
+    .archive-name { overflow-wrap: anywhere; font-size: 12.5px; }
+    .backup-table tbody td:nth-child(2),
+    .backup-table tbody td:nth-child(4) {
+        display: inline-block;
+        margin-right: 0.7rem;
+        font-size: 12.5px;
+    }
+    .backup-table tbody td:nth-child(2) { color: var(--text-muted); }
+    .backup-table tbody td:nth-child(4) { font-weight: 600; }
+    .backup-table tbody td:nth-child(3) { display: none; }   /* Age: redundant */
+    .cell-actions { text-align: left; margin-top: 0.3rem; }
+    .cell-actions .btn { margin-left: 0; margin-right: 0.4rem; }
+    .backup-table tfoot,
+    .backup-table tfoot tr { display: flex; width: 100%; justify-content: space-between; }
+    .backup-table tfoot td { border-bottom: none; padding: 0.5rem 0 0; }
+
+    /* Header rows and the manual-backup row wrap gracefully */
+    .card-header { flex-wrap: wrap; gap: 0.5rem; }
+    .auto-row { flex-wrap: wrap; gap: 0.8rem; }
+    .card-title { flex-wrap: wrap; row-gap: 0.2rem; }
+
+    .modal-body { padding: 0.9rem 1rem; }
+    .modal-header { padding: 1rem 1rem 0; }
+    .modal-footer { padding: 0.8rem 1rem 1rem; }
+}
 
 /* ---------- Toggle ---------- */
 
