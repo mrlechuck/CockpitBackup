@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=1.0.0">
+    <link rel="stylesheet" href="style.css?v=1.0.1">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -95,7 +95,7 @@
                     </div>
                 </div>
 
-                <div class="card-footer">
+                <div class="card-footer" id="s3-footer">
                     <button id="save-s3" class="btn btn-primary">Save S3 settings</button>
                     <button id="test-s3" class="btn">Test connection</button>
                     <span id="s3-test-result" class="muted small"></span>
@@ -369,6 +369,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=1.0.0"></script>
+    <script src="app.js?v=1.0.1"></script>
 </body>
 </html>

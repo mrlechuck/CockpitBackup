@@ -177,12 +177,15 @@ backup_one() {
     rel="${folder#/}"
 
     remote="false"
-    if [ "$(wants_s3 "$folder")" = "True" ] && s3_configured; then
-        if command -v aws >/dev/null; then
-            remote="true"
-        else
+    if [ "$(wants_s3 "$folder")" = "True" ]; then
+        if ! s3_configured; then
+            echo "  NOTE: S3 storage requested but S3 is disabled, storing locally" >&2
+            log_line "$folder" "$trigger" "S3 requested but S3 is disabled: storing locally"
+        elif ! command -v aws >/dev/null; then
             echo "  WARNING: aws CLI not installed, storing locally instead" >&2
             log_line "$folder" "$trigger" "S3 requested but aws CLI missing: storing locally"
+        else
+            remote="true"
         fi
     fi
 
@@ -216,10 +219,13 @@ backup_one() {
     # marks an in-progress backup (reported by `list` as "running"). tar writes
     # to .partial: an interrupted or failed run never leaves a half-written
     # archive visible in the UI.
-    python3 - "$workdir/$name.meta" "$folder" "$trigger" <<'EOF'
+    python3 - "$workdir/$name.meta" "$folder" "$trigger" "$remote" <<'EOF'
 import json, sys
+meta = {"folder": sys.argv[2], "trigger": sys.argv[3]}
+if sys.argv[4] == "true":
+    meta["s3"] = True     # lets the UI announce the run as an S3 backup
 with open(sys.argv[1], "w") as f:
-    json.dump({"folder": sys.argv[2], "trigger": sys.argv[3]}, f)
+    json.dump(meta, f)
 EOF
     CLEANUP_FILE="$tmp"
     CLEANUP_FOLDER="$folder"
@@ -227,15 +233,19 @@ EOF
     tar -czf "$tmp" ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
         2> >(grep -v 'Removing leading' >&2 || true)
 
-    local size_h size_b dur
+    local size_h size_b dur tar_dur
     size_h=$(du -h "$tmp" | cut -f1)
     size_b=$(wc -c < "$tmp" | tr -d ' ')
+    tar_dur=$(( $(date +%s) - start_ts ))
 
     if [ "$remote" = "true" ]; then
-        local bucket key
+        local bucket key up_start
         bucket=$(s3_cfg bucket)
         key=$(s3_key "$name")
+        log_line "$folder" "$trigger" "Archive created: $name ($size_h) in ${tar_dur}s"
+        log_line "$folder" "$trigger" "S3 upload started: $name → s3://$bucket/$key"
         echo "  Uploading to S3: s3://$bucket/$key ($size_h)"
+        up_start=$(date +%s)
         if s3_run s3 cp "$tmp" "s3://$bucket/$key" --only-show-errors; then
             # Meta stub in the destination keeps the remote archive visible in the UI
             python3 - "$archive.meta" "$folder" "$trigger" "$size_b" <<'EOF'
@@ -245,11 +255,14 @@ with open(sys.argv[1], "w") as f:
                "remote": True, "s3": True,
                "size": int(sys.argv[4]), "mtime": int(time.time())}, f)
 EOF
+            local up_dur
+            up_dur=$(( $(date +%s) - up_start ))
+            log_line "$folder" "$trigger" "S3 upload completed: $name in ${up_dur}s"
             rm -f "$tmp" "$workdir/$name.meta"
             CLEANUP_FILE=""
             CLEANUP_FOLDER=""
             dur=$(( $(date +%s) - start_ts ))
-            log_line "$folder" "$trigger" "Completed on S3: $name ($size_h) in ${dur}s"
+            log_line "$folder" "$trigger" "Local temp copy deleted — done on S3 ($size_h, ${dur}s total)"
             echo "  Uploaded and removed locally."
         else
             # Upload failed: keep the data by falling back to local storage
@@ -257,7 +270,6 @@ EOF
             mv "$workdir/$name.meta" "$archive.meta"
             CLEANUP_FILE=""
             CLEANUP_FOLDER=""
-            dur=$(( $(date +%s) - start_ts ))
             log_line "$folder" "$trigger" "S3 upload FAILED: $name kept locally ($size_h)"
             echo "  WARNING: S3 upload failed, archive kept locally" >&2
         fi
@@ -546,6 +558,7 @@ for pat in ("backup-*.tar.gz.partial", os.path.join(".tmp", "backup-*.tar.gz.par
                 "name": os.path.basename(p)[:-8],
                 "folder": meta.get("folder"),
                 "trigger": meta.get("trigger"),
+                "remote": bool(meta.get("s3")),
             })
 
 # Free space on the destination filesystem (nearest existing parent)
@@ -652,7 +665,12 @@ cmd_delete() {
         die "archive not found: $archive"
     fi
     if meta_is_remote "$archive.meta"; then
-        s3_delete_remote "$name"
+        # Never drop the list entry while the remote object cannot be removed:
+        # that would leave an invisible orphan on the bucket
+        s3_configured || die "archive is stored on S3: enable S3 first so the remote copy can be removed too"
+        command -v aws >/dev/null || die "aws CLI is not installed: cannot remove the remote copy"
+        s3_run s3 rm "s3://$(s3_cfg bucket)/$(s3_key "$name")" --only-show-errors \
+            || die "failed to remove the remote copy from S3"
     fi
     rm -f "$archive" "$archive.meta"
     echo "Deleted: $name"

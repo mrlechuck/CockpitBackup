@@ -39,15 +39,18 @@ if (typeof cockpit === "undefined") {
                 "2026-08-07 02:00:01 [scheduled] Backup started\n" +
                 "2026-08-07 02:00:26 [scheduled] Completed: backup-etc-20260807-020000.tar.gz (12M) in 25s\n"
         };
-        // For manual testing: simulate a scheduled backup starting on a folder
-        window.__simulateScheduled = function (folder, seconds) {
-            mockRunning.push({ name: "backup-sim.tar.gz", folder, trigger: "scheduled" });
+        // For manual testing: simulate a scheduled backup starting on a folder.
+        // opts: { remote: bool, fail: bool } — fail simulates an S3 upload failure
+        window.__simulateScheduled = function (folder, seconds, opts) {
+            opts = opts || {};
+            mockRunning.push({ name: "backup-sim.tar.gz", folder, trigger: "scheduled", remote: !!opts.remote });
             setTimeout(() => {
                 const i = mockRunning.findIndex(r => r.folder === folder);
                 if (i !== -1) mockRunning.splice(i, 1);
                 mockArchives.unshift({
                     name: "backup-sim-" + Date.now() + ".tar.gz", size: 5000000,
-                    mtime: Math.floor(Date.now() / 1000), folder, trigger: "scheduled"
+                    mtime: Math.floor(Date.now() / 1000), folder, trigger: "scheduled",
+                    remote: !!opts.remote && !opts.fail
                 });
             }, (seconds || 12) * 1000);
         };
@@ -183,6 +186,14 @@ const ICONS = {
     info: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm9-3a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM6.75 7h1.5a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1 0-1.5h.5V8.5h-.5a.75.75 0 0 1 0-1.5Z"/></svg>'
 };
 
+function storageBadge(isRemote, tooltip) {
+    const badge = document.createElement("span");
+    badge.className = "storage-badge " + (isRemote ? "storage-s3" : "storage-local");
+    badge.textContent = isRemote ? "S3" : "Local";
+    badge.dataset.tooltip = tooltip;
+    return badge;
+}
+
 function iconButton(icon, tooltip, onClick, variant) {
     const btn = document.createElement("button");
     btn.className = "btn btn-icon" + (variant ? " btn-icon-" + variant : "");
@@ -271,16 +282,30 @@ function displayName(folder) {
 }
 
 /* Toast when an automatic backup starts or finishes (manual ones already
- * give feedback through their own button/console). */
+ * give feedback through their own button/console). For S3 backups the finish
+ * message reflects the real outcome: uploaded, or kept locally on failure. */
 function notifyRunningTransitions() {
-    const current = new Map(running.map(r => [r.folder, r.trigger || "manual"]));
-    current.forEach((trig, folder) => {
-        if (!runningPrev.has(folder) && trig !== "manual")
-            toast("Automatic backup in progress: " + displayName(folder), "info");
+    const current = new Map(running.map(r => [r.folder, { trigger: r.trigger || "manual", remote: !!r.remote }]));
+    current.forEach((info, folder) => {
+        if (!runningPrev.has(folder) && info.trigger !== "manual")
+            toast("Automatic backup in progress: " + displayName(folder) +
+                (info.remote ? " (uploading to S3)" : ""), "info");
     });
-    runningPrev.forEach((trig, folder) => {
-        if (!current.has(folder) && trig !== "manual")
+    runningPrev.forEach((info, folder) => {
+        if (current.has(folder) || info.trigger === "manual")
+            return;
+        if (info.remote) {
+            // The freshly refreshed archive list tells us how it ended
+            const newest = archives
+                .filter(a => a.folder === folder)
+                .sort((a, b) => b.mtime - a.mtime)[0];
+            if (newest && newest.remote)
+                toast("Backup uploaded to S3: " + displayName(folder), "success");
+            else
+                toast("S3 upload failed: backup kept locally — " + displayName(folder), "danger");
+        } else {
             toast("Backup finished: " + displayName(folder), "success");
+        }
     });
     runningPrev = current;
 }
@@ -390,13 +415,15 @@ function configRow(b, idx) {
     const path = document.createElement("span");
     path.className = b.title ? "config-title" : "config-path";
     path.textContent = b.title || b.folder;
+    path.appendChild(storageBadge(!!b.s3, b.s3
+        ? "Backups are uploaded to the S3 bucket"
+        : "Backups are stored on the local disk"));
 
     const meta = document.createElement("span");
     meta.className = "config-meta muted";
     const parts = [];
     parts.push(b.enabled === false ? "automatic backup off" : "daily at " + entryTime(b));
     parts.push("keeps " + (b.retention_days || config.retention_days) + " days");
-    parts.push(b.s3 ? "S3 remote" : "local disk");
     if (b.excludes && b.excludes.length)
         parts.push(b.excludes.length === 1 ? "1 exclusion" : b.excludes.length + " exclusions");
     meta.textContent = parts.join(" · ");
@@ -583,13 +610,9 @@ function archiveRow(item) {
     tdName.className = "archive-name";
     tdName.textContent = item.name;
 
-    const storageBadge = document.createElement("span");
-    storageBadge.className = "storage-badge " + (item.remote ? "storage-s3" : "storage-local");
-    storageBadge.textContent = item.remote ? "S3" : "Local";
-    storageBadge.dataset.tooltip = item.remote
+    tdName.appendChild(storageBadge(!!item.remote, item.remote
         ? "Stored on the S3 bucket (restore downloads it automatically)"
-        : "Stored on the local destination disk";
-    tdName.appendChild(storageBadge);
+        : "Stored on the local destination disk"));
 
     if (item.trigger === "catchup") {
         const info = document.createElement("span");
@@ -616,7 +639,13 @@ function archiveRow(item) {
     tdActions.appendChild(iconButton("restore", "Restore", () => openRestoreDialog(item), "primary"));
     if (!item.remote)   // download streams the local file; remote ones live on S3
         tdActions.appendChild(iconButton("download", "Download", () => downloadArchive(item), "success"));
-    tdActions.appendChild(iconButton("trash", "Delete", () => openDeleteDialog(item.name), "danger"));
+    const delBtn = iconButton("trash", "Delete", () => openDeleteDialog(item.name), "danger");
+    if (item.remote && !s3Ready()) {
+        // Deleting now would orphan the object on the bucket
+        delBtn.disabled = true;
+        delBtn.dataset.tooltip = "Enable S3 to delete this remote archive";
+    }
+    tdActions.appendChild(delBtn);
 
     tr.appendChild(tdName);
     tr.appendChild(tdDate);
@@ -652,10 +681,14 @@ function openConfigDialog(idx) {
         ? ""
         : (config.backups[idx].excludes || []).join("\n");
     const storage = $("config-storage");
-    storage.value = (idx !== -1 && config.backups[idx].s3) ? "s3" : "local";
-    storage.querySelector('option[value="s3"]').disabled = !s3Ready();
+    const s3Option = storage.querySelector('option[value="s3"]');
+    const entryUsesS3 = idx !== -1 && !!config.backups[idx].s3;
+    s3Option.textContent = s3Ready() ? "Amazon S3 (remote)" : "Amazon S3 (currently disabled)";
+    // An entry already on S3 keeps its choice even while S3 is globally off:
+    // its backups fall back to local until S3 is re-enabled
+    s3Option.disabled = !s3Ready() && !entryUsesS3;
+    storage.value = entryUsesS3 ? "s3" : "local";
     $("config-storage-hint").hidden = s3Ready();
-    if (!s3Ready()) storage.value = "local";
     $("estimate-result").textContent = "";
     showConfigError(null);
     openModal("config-dialog");
@@ -692,7 +725,7 @@ function saveConfigEntry() {
         return;
     }
 
-    const useS3 = $("config-storage").value === "s3" && s3Ready();
+    const useS3 = $("config-storage").value === "s3";
     if (editingIndex === -1) {
         const entry = { folder, time, retention_days: retention };
         if (title) entry.title = title;
@@ -835,6 +868,11 @@ function renderS3() {
     const badge = $("s3-badge");
     badge.textContent = s3Ready() ? "Enabled" : "Disabled";
     badge.className = "badge " + (s3Ready() ? "badge-on" : "badge-off");
+
+    // Collapse the card when S3 is off: only header, switch and description remain
+    const collapsed = !$("s3-enabled").checked;
+    $("s3-fields").hidden = collapsed;
+    $("s3-footer").hidden = collapsed;
 }
 
 function gatherS3() {
