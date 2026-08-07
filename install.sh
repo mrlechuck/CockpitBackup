@@ -42,13 +42,11 @@ else
     echo "Configurazione esistente trovata, la lascio invariata."
 fi
 
-# The old global-schedule drop-in is no longer used
-rm -rf /etc/systemd/system/cockpit-backup.timer.d
-
 systemctl daemon-reload
 # The timer is the engine for per-folder schedules: always on
 systemctl enable --now cockpit-backup.timer
-systemctl restart cockpit-backup.timer
+# Generate the OnCalendar entries from the current configuration
+"$HELPER_DIR/cockpit-backup.sh" apply-schedule
 
 echo
 echo "Installazione completata."

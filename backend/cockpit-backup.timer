@@ -1,9 +1,11 @@
 [Unit]
-Description=Per-folder daily backup checks (Cockpit plugin)
+Description=Per-folder daily backups (Cockpit plugin)
 
 [Timer]
-# Every 10 minutes: the service backs up only the folders whose daily time has passed
-OnCalendar=*:0/10
+# Placeholder: apply-schedule writes a drop-in with one OnCalendar entry
+# per configured backup time, replacing this default.
+OnCalendar=*-*-* 03:00:00
+AccuracySec=1min
 Persistent=true
 
 [Install]

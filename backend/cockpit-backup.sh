@@ -5,12 +5,14 @@
 # Subcommands:
 #   backup [FOLDER]           back up all configured folders, or a single one
 #   backup-due                back up folders whose daily time has passed (run by the timer)
+#   apply-schedule            regenerate the timer's OnCalendar entries from the config
 #   list                      list existing archives as JSON (with original folder)
 #   restore ARCHIVE [TARGET]  restore an archive (to / or to TARGET)
 #   delete ARCHIVE            delete an archive
 set -euo pipefail
 
 CONFIG="${COCKPIT_BACKUP_CONFIG:-/etc/cockpit-backup/config.json}"
+DROPIN_DIR="${COCKPIT_BACKUP_DROPIN:-/etc/systemd/system/cockpit-backup.timer.d}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -193,9 +195,10 @@ cmd_backup() {
     prune
 }
 
-# Called by the systemd timer every 10 minutes. A folder is due when its daily
-# time has passed and its newest archive is older than that scheduled moment —
-# so missed runs (server off) are caught up at the next check.
+# Called by the systemd timer at each configured time. A folder is due when its
+# daily time has passed and its newest archive is older than that scheduled
+# moment — so missed runs (server off) are caught up at the next firing
+# (Persistent=true also fires once at boot for missed schedules).
 cmd_backup_due() {
     mkdir -p "$DEST"
     local due
@@ -301,6 +304,42 @@ print(json.dumps({"bytes": total, "files": files}))
 EOF
 }
 
+# Regenerate the timer schedule: one OnCalendar entry per distinct configured
+# time (enabled folders only). Called by the UI after every config change.
+cmd_apply_schedule() {
+    mkdir -p "$DROPIN_DIR"
+    {
+        echo "[Timer]"
+        echo "OnCalendar="   # reset the base unit's default
+        python3 - "$CONFIG" <<'EOF'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+default = cfg.get("time", "02:00")
+times = set()
+for b in cfg.get("backups", []):
+    if not b.get("enabled", True):
+        continue
+    t = b.get("time") or default
+    try:
+        hh, mm = t.split(":")
+        times.add("%02d:%02d" % (int(hh), int(mm)))
+    except ValueError:
+        pass
+if not times:
+    # keep the timer valid even with nothing enabled; backup-due just no-ops
+    times.add("03:00")
+for t in sorted(times):
+    print("OnCalendar=*-*-* %s:00" % t)
+EOF
+    } > "$DROPIN_DIR/override.conf"
+    systemctl daemon-reload
+    if systemctl is-active --quiet cockpit-backup.timer; then
+        systemctl restart cockpit-backup.timer
+    fi
+    echo "Schedule applied:"
+    grep '^OnCalendar=..' "$DROPIN_DIR/override.conf" || true
+}
+
 cmd_list() {
     python3 -c '
 import json, os, glob, sys
@@ -355,14 +394,15 @@ cmd_delete() {
 }
 
 case "${1:-}" in
-    backup)      shift; cmd_backup "${1:-}" ;;
-    backup-due)  cmd_backup_due ;;
-    list)        cmd_list ;;
+    backup)         shift; cmd_backup "${1:-}" ;;
+    backup-due)     cmd_backup_due ;;
+    apply-schedule) cmd_apply_schedule ;;
+    list)           cmd_list ;;
     estimate)    shift; cmd_estimate "$@" ;;
     restore)     shift; cmd_restore "$@" ;;
     delete)      shift; cmd_delete "$@" ;;
     *)
-        echo "Usage: $0 {backup [FOLDER]|backup-due|list|estimate FOLDER [PATTERN...]|restore ARCHIVE [TARGET]|delete ARCHIVE}" >&2
+        echo "Usage: $0 {backup [FOLDER]|backup-due|apply-schedule|list|estimate FOLDER [PATTERN...]|restore ARCHIVE [TARGET]|delete ARCHIVE}" >&2
         exit 2
         ;;
 esac

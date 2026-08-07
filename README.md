@@ -53,18 +53,21 @@ access" button at the top).
 
 ### Per-folder scheduling
 
-The systemd timer fires **every 10 minutes** and runs `backup-due`, which checks
-which folders are due: a folder is due when its daily time has passed and its newest
-archive is older than that scheduled moment. This means:
+The systemd timer fires **exactly at the configured times**: `apply-schedule`
+generates one `OnCalendar` entry per distinct backup time (enabled folders only)
+and the UI regenerates them automatically after every configuration change.
+Each firing runs `backup-due`, which backs up the folders whose daily time has
+passed and whose newest archive is older than that scheduled moment. This means:
 
-- each folder starts at its own time (with at most ~10 minutes of delay)
-- if the server was off at the scheduled time, the backup runs at the first check
-  after boot (anacron-style)
+- each folder starts at its own time (systemd accuracy: within a minute)
+- no polling: nothing runs between the scheduled times
+- if the server was off at the scheduled time, `Persistent=true` fires the timer
+  at boot and the missed backups catch up (anacron-style)
 - a manual backup counts as the day's backup: the automatic one does not repeat
 
-The timer is enabled by `install.sh` and is the engine behind all schedules:
-per-folder enabling/disabling is done from the UI (the `enabled` field in the
-configuration). If the timer is not running, the UI shows a warning.
+Times are interpreted in the **server's timezone** (check with `timedatectl`).
+The timer is enabled by `install.sh`; per-folder enabling/disabling is done from
+the UI (the `enabled` field). If the timer is not running, the UI shows a warning.
 
 ### Archives
 

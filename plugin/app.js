@@ -61,6 +61,8 @@ if (typeof cockpit === "undefined") {
                             }, 350);
                         }
                     });
+                if (args[1] === "apply-schedule")
+                    return promiseWith({ out: "Schedule applied.\n" });
                 if (args[1] === "estimate")
                     return promiseWith({
                         run: (res, rej, stream) => {
@@ -496,6 +498,13 @@ function saveConfigFile() {
     return configFile.replace(config);
 }
 
+/* Regenerates the systemd timer's OnCalendar entries after any change
+ * that can affect the schedule (time, enabled flag, add/remove). */
+function applySchedule() {
+    return cockpit.spawn([HELPER, "apply-schedule"], { superuser: "require", err: "message" })
+        .catch(err => toast("Failed to update the schedule: " + errText(err), "danger"));
+}
+
 function openConfigDialog(idx) {
     editingIndex = idx;
     $("config-title").textContent = idx === -1 ? "Add backup" : "Edit backup";
@@ -561,6 +570,7 @@ function saveConfigEntry() {
     const btn = $("config-save");
     setLoading(btn, true);
     saveConfigFile()
+        .then(applySchedule)
         .then(() => {
             closeModal("config-dialog");
             toast(editingIndex === -1 ? "Backup added" : "Backup updated", "success");
@@ -574,6 +584,7 @@ function toggleEntry(idx, enabled) {
     const entry = config.backups[idx];
     entry.enabled = enabled;
     saveConfigFile()
+        .then(applySchedule)
         .then(() => {
             toast(enabled
                 ? "Automatic backup enabled for " + entry.folder
@@ -631,6 +642,7 @@ function confirmConfigDelete() {
     const btn = $("config-delete-confirm");
     setLoading(btn, true);
     saveConfigFile()
+        .then(applySchedule)
         .then(() => {
             closeModal("config-delete-dialog");
             toast("Backup removed", "success");
