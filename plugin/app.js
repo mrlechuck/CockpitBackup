@@ -126,6 +126,28 @@ function errText(err) {
     return (err && (err.message || err.problem)) || String(err);
 }
 
+/* ---------- Icons ---------- */
+
+const ICONS = {
+    edit: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.609Zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354l-1.086-1.086ZM11.189 6.25 9.75 4.81l-6.286 6.287a.25.25 0 0 0-.064.108l-.558 1.953 1.953-.558a.25.25 0 0 0 .108-.064l6.286-6.286Z"/></svg>',
+    trash: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25ZM11 3V1.75A1.75 1.75 0 0 0 9.25 0h-2.5A1.75 1.75 0 0 0 5 1.75V3H2.75a.75.75 0 0 0 0 1.5h.3l.815 8.15A1.5 1.5 0 0 0 5.357 14h5.285a1.5 1.5 0 0 0 1.493-1.35l.815-8.15h.3a.75.75 0 0 0 0-1.5H11Zm.14 1.5H4.86l.8 7.995c.013.127.12.255.249.255h5.285c.129 0 .236-.128.249-.255l.8-7.995Z"/></svg>',
+    restore: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a7 7 0 1 1-6.95 7.85.75.75 0 0 1 1.49-.19 5.5 5.5 0 1 0 1.37-4.37L5.53 5.9a.75.75 0 0 1-.53 1.28H1.75A.75.75 0 0 1 1 6.43V3.18a.75.75 0 0 1 1.28-.53l1.06 1.06A6.98 6.98 0 0 1 8 1Zm-.75 3.5a.75.75 0 0 1 1.5 0v3.19l2.03 2.03a.75.75 0 1 1-1.06 1.06L7.47 8.53a.75.75 0 0 1-.22-.53V4.5Z"/></svg>',
+    download: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a.75.75 0 0 1 .75.75v6.69l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1ZM2.75 13a.75.75 0 0 0 0 1.5h10.5a.75.75 0 0 0 0-1.5H2.75Z"/></svg>'
+};
+
+function iconButton(icon, tooltip, onClick, variant) {
+    const btn = document.createElement("button");
+    btn.className = "btn btn-icon" + (variant ? " btn-icon-" + variant : "");
+    btn.dataset.tooltip = tooltip;
+    btn.setAttribute("aria-label", tooltip);
+    btn.innerHTML = ICONS[icon];
+    btn.addEventListener("click", ev => {
+        ev.stopPropagation();
+        onClick(ev);
+    });
+    return btn;
+}
+
 /* ---------- UI helpers ---------- */
 
 function setLoading(btn, loading) {
@@ -231,6 +253,10 @@ function renderListView() {
     countBadge.hidden = config.backups.length === 0;
     countBadge.textContent = config.backups.length;
 
+    // Overall disk usage of every archive in the destination (orphans included)
+    const grandTotal = archives.reduce((s, a) => s + a.size, 0);
+    $("config-total").textContent = archives.length > 0 ? formatSize(grandTotal) + " total" : "";
+
     const orphans = archivesLoaded ? archivesFor(OTHER) : [];
     const empty = config.backups.length === 0 && orphans.length === 0;
     $("config-empty").hidden = !empty;
@@ -289,7 +315,7 @@ function configRow(b, idx) {
     const statsSub = document.createElement("span");
     statsSub.className = "config-stats-sub";
     statsSub.textContent = items.length
-        ? (items.length === 1 ? "1 archive" : items.length + " archives") + " · " + formatAge(last)
+        ? (items.length === 1 ? "1 archive" : items.length + " archives") + " · last " + formatAge(last)
         : "no backups yet";
     stats.appendChild(size);
     stats.appendChild(statsSub);
@@ -314,15 +340,8 @@ function configRow(b, idx) {
         toggleEntry(idx, toggleInput.checked);
     });
 
-    const editBtn = document.createElement("button");
-    editBtn.className = "btn btn-small";
-    editBtn.textContent = "Edit";
-    editBtn.addEventListener("click", ev => { ev.stopPropagation(); openConfigDialog(idx); });
-
-    const removeBtn = document.createElement("button");
-    removeBtn.className = "btn btn-small";
-    removeBtn.textContent = "Remove";
-    removeBtn.addEventListener("click", ev => { ev.stopPropagation(); openConfigDeleteDialog(idx); });
+    const editBtn = iconButton("edit", "Edit", () => openConfigDialog(idx), "warning");
+    const removeBtn = iconButton("trash", "Remove", () => openConfigDeleteDialog(idx), "danger");
 
     const chevron = document.createElement("span");
     chevron.className = "chevron";
@@ -459,19 +478,9 @@ function archiveRow(item) {
 
     const tdActions = document.createElement("td");
     tdActions.className = "cell-actions";
-
-    const restoreBtn = document.createElement("button");
-    restoreBtn.className = "btn btn-small";
-    restoreBtn.textContent = "Restore";
-    restoreBtn.addEventListener("click", () => openRestoreDialog(item));
-
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "btn btn-small btn-danger";
-    deleteBtn.textContent = "Delete";
-    deleteBtn.addEventListener("click", () => openDeleteDialog(item.name));
-
-    tdActions.appendChild(restoreBtn);
-    tdActions.appendChild(deleteBtn);
+    tdActions.appendChild(iconButton("restore", "Restore", () => openRestoreDialog(item), "primary"));
+    tdActions.appendChild(iconButton("download", "Download", () => downloadArchive(item), "success"));
+    tdActions.appendChild(iconButton("trash", "Delete", () => openDeleteDialog(item.name), "danger"));
 
     tr.appendChild(tdName);
     tr.appendChild(tdDate);
@@ -690,6 +699,37 @@ function runBackup(folder, btn, consoleWrap, consoleOut) {
         toast("Backup failed", "danger");
     });
     proc.finally(() => setLoading(btn, false));
+}
+
+/* ---------- Archive download ---------- */
+
+/* Streams the archive through a Cockpit fsread1 channel: the browser downloads
+ * it directly, without buffering the whole file in memory. */
+function downloadArchive(item) {
+    if (!cockpit.transport || !cockpit.transport.csrf_token) {
+        toast("Download is not available in preview mode", "info");
+        return;
+    }
+    const path = config.destination.replace(/\/+$/, "") + "/" + item.name;
+    const payload = {
+        payload: "fsread1",
+        binary: "raw",
+        path,
+        superuser: "try",
+        max_read_size: 1099511627776,
+        external: {
+            "content-disposition": 'attachment; filename="' + item.name + '"',
+            "content-type": "application/gzip"
+        }
+    };
+    const url = "/cockpit/channel/" + cockpit.transport.csrf_token + "?" +
+        window.btoa(JSON.stringify(payload));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = item.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
 }
 
 /* ---------- Archive delete ---------- */

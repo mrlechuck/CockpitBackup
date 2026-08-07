@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=0.3.0">
+    <link rel="stylesheet" href="style.css?v=0.4.0">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -52,6 +52,7 @@
                         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1.5 3.25A1.75 1.75 0 0 1 3.25 1.5h2.69c.46 0 .9.18 1.23.51l.82.82c.05.05.11.08.18.08h4.58A1.75 1.75 0 0 1 14.5 4.66v7.59a1.75 1.75 0 0 1-1.75 1.75H3.25a1.75 1.75 0 0 1-1.75-1.75v-9Z"/></svg>
                         Configured backups
                         <span id="config-count" class="badge badge-count" hidden></span>
+                        <span id="config-total" class="config-total"></span>
                     </h2>
                     <button id="add-config" class="btn btn-primary btn-small">
                         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 2a.75.75 0 0 1 .75.75v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5A.75.75 0 0 1 8 2Z"/></svg>
@@ -282,6 +283,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=0.3.0"></script>
+    <script src="app.js?v=0.4.0"></script>
 </body>
 </html>

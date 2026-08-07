@@ -14,6 +14,18 @@ CONFIG="${COCKPIT_BACKUP_CONFIG:-/etc/cockpit-backup/config.json}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
+# If a backup is interrupted (page closed, tar failure, signal), remove the
+# in-flight partial file and its metadata so no orphan archive is left behind.
+CLEANUP_FILE=""
+cleanup() {
+    if [ -n "$CLEANUP_FILE" ]; then
+        rm -f "$CLEANUP_FILE" "${CLEANUP_FILE%.partial}.meta"
+        CLEANUP_FILE=""
+    fi
+}
+trap cleanup EXIT
+trap 'cleanup; trap - EXIT; exit 143' INT TERM HUP
+
 [ -f "$CONFIG" ] || die "configuration not found: $CONFIG"
 
 cfg_get() {
@@ -71,9 +83,10 @@ archive_path() {
 
 backup_one() {
     local folder="$1" stamp="$2"
-    local slug archive rel
+    local slug archive tmp rel
     slug=$(printf '%s' "${folder#/}" | tr -c 'A-Za-z0-9._-' '-')
     archive="$DEST/backup-$slug-$stamp.tar.gz"
+    tmp="$archive.partial"
     rel="${folder#/}"
 
     # Per-folder exclusions: relative to the folder (or absolute), globs allowed.
@@ -91,17 +104,20 @@ backup_one() {
     done < <(cfg_excludes "$folder")
 
     echo "Backing up $folder"
-    tar -czf "$archive" ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
+    # Write to a .partial file and rename only on success: an interrupted or
+    # failed run never leaves a half-written archive visible in the UI.
+    CLEANUP_FILE="$tmp"
+    tar -czf "$tmp" ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
         2> >(grep -v 'Removing leading' >&2 || true)
-    echo "  Archive: $archive"
-    echo "  Size: $(du -h "$archive" | cut -f1)"
-
-    # Sidecar metadata: original folder, shown by the UI before a restore
     python3 - "$archive.meta" "$folder" <<'EOF'
 import json, sys
 with open(sys.argv[1], "w") as f:
     json.dump({"folder": sys.argv[2]}, f)
 EOF
+    mv "$tmp" "$archive"
+    CLEANUP_FILE=""
+    echo "  Archive: $archive"
+    echo "  Size: $(du -h "$archive" | cut -f1)"
 }
 
 prune() {
@@ -130,6 +146,17 @@ for arch in glob.glob(os.path.join(dest, "backup-*.tar.gz")):
         if os.path.exists(meta):
             os.remove(meta)
         print("Removed:", os.path.basename(arch))
+
+# Leftovers from interrupted runs: stale .partial files and .meta sidecars
+# whose archive never materialized (age-guarded to spare in-flight backups)
+for p in glob.glob(os.path.join(dest, "backup-*.tar.gz.partial")):
+    if now - os.stat(p).st_mtime > 86400:
+        os.remove(p)
+        print("Removed stale partial:", os.path.basename(p))
+for meta in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
+    if not os.path.exists(meta[:-5]) and now - os.stat(meta).st_mtime > 3600:
+        os.remove(meta)
+        print("Removed orphan meta:", os.path.basename(meta))
 EOF
     echo "Done."
 }

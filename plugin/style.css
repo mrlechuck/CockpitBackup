@@ -15,6 +15,9 @@
     --danger: #c9190b;
     --danger-hover: #a30000;
     --success: #3e8635;
+    --success-hover: #2f6929;
+    --warning: #dc9a00;
+    --warning-hover: #b57f00;
     --warning-bg: #fdf7e7;
     --warning-border: #f0ab00;
     --hover-row: #f5f5f5;
@@ -40,6 +43,10 @@
         --primary-hover: #4696e8;
         --danger: #e0382a;
         --danger-hover: #ee5b4f;
+        --success: #56a446;
+        --success-hover: #6fbd5f;
+        --warning: #f0ab00;
+        --warning-hover: #ffc02b;
         --warning-bg: #332b12;
         --warning-border: #f0ab00;
         --hover-row: #2a2d31;
@@ -284,6 +291,12 @@ h2 {
     font-weight: 600;
     font-size: 12px;
 }
+.config-total {
+    font-size: 12.5px;
+    font-weight: 700;
+    /* desaturated green: success blended toward gray, adapts to both themes */
+    color: color-mix(in srgb, var(--success) 60%, var(--text-muted));
+}
 
 /* ---------- Form ---------- */
 
@@ -455,6 +468,34 @@ input:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .btn-small { padding: 0.25rem 0.7rem; font-size: 13px; }
 
+.btn-icon {
+    padding: 0.34rem 0.45rem;
+    line-height: 0;
+    color: var(--text-muted);
+}
+.btn-icon:hover { color: var(--text); }
+.btn-icon .icon { width: 15px; height: 15px; }
+.btn-icon-danger { color: var(--danger); }
+.btn-icon-danger:hover {
+    color: var(--danger-hover);
+    border-color: var(--danger);
+}
+.btn-icon-primary { color: var(--primary); }
+.btn-icon-primary:hover {
+    color: var(--primary-hover);
+    border-color: var(--primary);
+}
+.btn-icon-success { color: var(--success); }
+.btn-icon-success:hover {
+    color: var(--success-hover);
+    border-color: var(--success);
+}
+.btn-icon-warning { color: var(--warning); }
+.btn-icon-warning:hover {
+    color: var(--warning-hover);
+    border-color: var(--warning);
+}
+
 /* Bottone con spinner */
 .btn.loading { position: relative; color: transparent; }
 .btn.loading::after {
@@ -521,10 +562,11 @@ input:disabled { opacity: 0.55; cursor: not-allowed; }
     left: 50%;
     background: #1b1d21;
     color: #fff;
-    padding: 0.32rem 0.65rem;
+    padding: 0.5rem 0.85rem;
     border-radius: 6px;
-    font-size: 12px;
+    font-size: 12.5px;
     font-weight: 500;
+    line-height: 1.35;
     white-space: nowrap;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
     opacity: 0;
