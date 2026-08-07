@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=0.5.0">
+    <link rel="stylesheet" href="style.css?v=0.5.1">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -173,6 +173,7 @@
                     <div class="field">
                         <label class="field-label" for="config-time">Daily backup time</label>
                         <input type="time" id="config-time" value="02:00">
+                        <p class="field-hint muted">24-hour format, server's timezone.</p>
                     </div>
                     <div class="field">
                         <label class="field-label" for="config-retention">Keep backups for (days)</label>
@@ -283,6 +284,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=0.5.0"></script>
+    <script src="app.js?v=0.5.1"></script>
 </body>
 </html>

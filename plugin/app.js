@@ -265,9 +265,13 @@ function renderListView() {
     list.hidden = empty;
     if (empty) return;
 
-    config.backups.forEach((b, idx) => {
-        list.appendChild(configRow(b, idx));
-    });
+    // Sorted by daily time (then by name); indexes stay bound to the config array
+    config.backups
+        .map((b, idx) => ({ b, idx }))
+        .sort((x, y) =>
+            entryTime(x.b).localeCompare(entryTime(y.b)) ||
+            (x.b.title || x.b.folder).localeCompare(y.b.title || y.b.folder))
+        .forEach(({ b, idx }) => list.appendChild(configRow(b, idx)));
 
     if (orphans.length > 0)
         list.appendChild(otherRow(orphans));
