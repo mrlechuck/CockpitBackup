@@ -4,7 +4,8 @@
     <meta charset="utf-8">
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="style.css">
+    <!-- The ?v= query busts browser caches: bump it on every release -->
+    <link rel="stylesheet" href="style.css?v=0.3.0">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -82,6 +83,7 @@
                 </button>
                 <div class="detail-heading">
                     <h1 id="detail-title" class="mono-title"></h1>
+                    <p id="detail-path" class="detail-path" hidden></p>
                     <p id="detail-sub" class="subtitle"></p>
                 </div>
             </header>
@@ -136,6 +138,13 @@
                             </tr>
                         </thead>
                         <tbody id="backup-rows"></tbody>
+                        <tfoot>
+                            <tr class="total-row">
+                                <td colspan="3" id="detail-total-label">Total</td>
+                                <td class="col-right" id="detail-total"></td>
+                                <td></td>
+                            </tr>
+                        </tfoot>
                     </table>
                 </div>
             </section>
@@ -273,6 +282,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=0.3.0"></script>
 </body>
 </html>

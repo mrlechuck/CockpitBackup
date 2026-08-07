@@ -265,21 +265,38 @@ function configRow(b, idx) {
     const meta = document.createElement("span");
     meta.className = "config-meta muted";
     const parts = [];
-    if (b.title) parts.push(b.folder);
     parts.push(b.enabled === false ? "automatic backup off" : "daily at " + entryTime(b));
-    parts.push(items.length === 1 ? "1 archive" : items.length + " archives");
-    if (items.length) parts.push(formatSize(total));
-    parts.push(last ? "last: " + formatAge(last) : "no backups yet");
     parts.push("keeps " + (b.retention_days || config.retention_days) + " days");
     if (b.excludes && b.excludes.length)
         parts.push(b.excludes.length === 1 ? "1 exclusion" : b.excludes.length + " exclusions");
     meta.textContent = parts.join(" · ");
 
     main.appendChild(path);
+    if (b.title) {
+        const pathLine = document.createElement("span");
+        pathLine.className = "config-pathline";
+        pathLine.textContent = b.folder;
+        main.appendChild(pathLine);
+    }
     main.appendChild(meta);
+
+    const stats = document.createElement("div");
+    stats.className = "config-stats";
+    stats.title = "Archives of this backup: total size, count and last run";
+    const size = document.createElement("span");
+    size.className = "config-size";
+    size.textContent = items.length ? formatSize(total) : "—";
+    const statsSub = document.createElement("span");
+    statsSub.className = "config-stats-sub";
+    statsSub.textContent = items.length
+        ? (items.length === 1 ? "1 archive" : items.length + " archives") + " · " + formatAge(last)
+        : "no backups yet";
+    stats.appendChild(size);
+    stats.appendChild(statsSub);
 
     const actions = document.createElement("div");
     actions.className = "config-actions";
+    actions.appendChild(stats);
 
     const toggleWrap = document.createElement("label");
     toggleWrap.className = "switch switch-sm";
@@ -340,14 +357,25 @@ function otherRow(orphans) {
 
     const meta = document.createElement("span");
     meta.className = "config-meta muted";
-    meta.textContent = (orphans.length === 1 ? "1 archive" : orphans.length + " archives") +
-        " · " + formatSize(total) + " · from folders no longer configured";
+    meta.textContent = "from folders no longer configured";
 
     main.appendChild(path);
     main.appendChild(meta);
 
+    const stats = document.createElement("div");
+    stats.className = "config-stats";
+    const size = document.createElement("span");
+    size.className = "config-size";
+    size.textContent = formatSize(total);
+    const statsSub = document.createElement("span");
+    statsSub.className = "config-stats-sub";
+    statsSub.textContent = orphans.length === 1 ? "1 archive" : orphans.length + " archives";
+    stats.appendChild(size);
+    stats.appendChild(statsSub);
+
     const actions = document.createElement("div");
     actions.className = "config-actions";
+    actions.appendChild(stats);
     const chevron = document.createElement("span");
     chevron.className = "chevron";
     chevron.textContent = "›";
@@ -378,10 +406,14 @@ function renderDetailView(folder) {
     $("detail-title").classList.toggle("mono-title", !isOther && !(entry && entry.title));
     $("detail-backup-card").hidden = isOther || !entry;
 
+    // Always show the backed-up path prominently, even when a title is set
+    const pathEl = $("detail-path");
+    pathEl.hidden = isOther || !(entry && entry.title);
+    pathEl.textContent = pathEl.hidden ? "" : folder;
+
     const items = archivesFor(folder);
     const total = items.reduce((s, a) => s + a.size, 0);
     const parts = [];
-    if (entry && entry.title) parts.push(folder);
     if (entry) parts.push(entry.enabled === false ? "automatic backup off" : "daily at " + entryTime(entry));
     parts.push(items.length === 1 ? "1 archive" : items.length + " archives");
     if (items.length) parts.push(formatSize(total) + " total");
@@ -397,6 +429,9 @@ function renderDetailView(folder) {
 
     $("list-empty").hidden = items.length > 0;
     $("list-table-wrap").hidden = items.length === 0;
+    $("detail-total").textContent = formatSize(total);
+    $("detail-total-label").textContent =
+        "Total · " + (items.length === 1 ? "1 archive" : items.length + " archives");
 
     const tbody = $("backup-rows");
     tbody.innerHTML = "";
