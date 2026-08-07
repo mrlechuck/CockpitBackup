@@ -1,6 +1,15 @@
 {
     "destination": "/var/backups/cockpit-backup",
     "retention_days": 30,
+    "s3": {
+        "enabled": false,
+        "bucket": "",
+        "region": "",
+        "prefix": "",
+        "endpoint": "",
+        "access_key": "",
+        "secret_key": ""
+    },
     "backups": [
         { "folder": "/etc", "time": "02:00", "retention_days": 30,
           "title": "System configuration" },

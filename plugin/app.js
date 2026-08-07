@@ -14,16 +14,18 @@ if (typeof cockpit === "undefined") {
         let mockConfig = {
             destination: "/var/backups/cockpit-backup",
             retention_days: 30,
+            s3: { enabled: true, bucket: "my-backups", region: "eu-south-1", prefix: "srv1/",
+                  endpoint: "", access_key: "AKIAEXAMPLE", secret_key: "supersecret" },
             backups: [
-                { folder: "/etc", time: "02:00", retention_days: 30, enabled: true, title: "System configuration" },
+                { folder: "/etc", time: "02:00", retention_days: 30, enabled: true, title: "System configuration", s3: true },
                 { folder: "/home/roberto/documents", time: "01:30", retention_days: 14, enabled: true },
                 { folder: "/var/www", time: "03:00", retention_days: 30, enabled: false, excludes: ["cache", "*.log"], title: "Web sites" }
             ]
         };
         const now = Math.floor(Date.now() / 1000);
         const mockArchives = [
-            { name: "backup-etc-20260807-020000.tar.gz", size: 12400000, mtime: now - 3600 * 7, folder: "/etc", trigger: "scheduled" },
-            { name: "backup-etc-20260806-020000.tar.gz", size: 12300000, mtime: now - 3600 * 31, folder: "/etc", trigger: "catchup" },
+            { name: "backup-etc-20260807-020000.tar.gz", size: 12400000, mtime: now - 3600 * 7, folder: "/etc", trigger: "scheduled", remote: true },
+            { name: "backup-etc-20260806-020000.tar.gz", size: 12300000, mtime: now - 3600 * 31, folder: "/etc", trigger: "catchup", remote: true },
             { name: "backup-home-roberto-documents-20260807-020000.tar.gz", size: 734003200, mtime: now - 3600 * 7, folder: "/home/roberto/documents", trigger: "scheduled" },
             { name: "backup-home-roberto-documents-20260806-020000.tar.gz", size: 731906048, mtime: now - 3600 * 31, folder: "/home/roberto/documents", trigger: "manual" },
             { name: "backup-home-roberto-documents-20260805-020000.tar.gz", size: 729808896, mtime: now - 3600 * 55, folder: "/home/roberto/documents", trigger: "catchup" },
@@ -98,6 +100,11 @@ if (typeof cockpit === "undefined") {
                     });
                 if (args[1] === "apply-schedule")
                     return promiseWith({ out: "Schedule applied.\n" });
+                if (args[1] === "test-s3")
+                    return promiseWith({
+                        run: (res) => setTimeout(() =>
+                            res("S3 connection OK: bucket 'my-backups' is reachable\n"), 700)
+                    });
                 if (args[1] === "estimate")
                     return promiseWith({
                         run: (res, rej, stream) => {
@@ -321,6 +328,7 @@ function renderListView() {
     const destInput = $("destination");
     if (document.activeElement !== destInput)   // don't clobber while typing
         destInput.value = config.destination;
+    renderS3();
     checkTimerEngine();
 
     $("config-loading").hidden = true;
@@ -332,9 +340,10 @@ function renderListView() {
     countBadge.hidden = config.backups.length === 0;
     countBadge.textContent = config.backups.length;
 
-    // Overall disk usage of every archive in the destination (orphans included)
-    const grandTotal = archives.reduce((s, a) => s + a.size, 0);
-    $("config-total").textContent = archives.length > 0 ? formatSize(grandTotal) + " total" : "";
+    // Overall disk usage of every LOCAL archive in the destination
+    const localArchives = archives.filter(a => !a.remote);
+    const grandTotal = localArchives.reduce((s, a) => s + a.size, 0);
+    $("config-total").textContent = localArchives.length > 0 ? formatSize(grandTotal) + " local total" : "";
 
     // Free space on the destination disk, red when below 10 GB
     const diskEl = $("disk-free");
@@ -387,6 +396,7 @@ function configRow(b, idx) {
     const parts = [];
     parts.push(b.enabled === false ? "automatic backup off" : "daily at " + entryTime(b));
     parts.push("keeps " + (b.retention_days || config.retention_days) + " days");
+    parts.push(b.s3 ? "S3 remote" : "local disk");
     if (b.excludes && b.excludes.length)
         parts.push(b.excludes.length === 1 ? "1 exclusion" : b.excludes.length + " exclusions");
     meta.textContent = parts.join(" · ");
@@ -545,6 +555,7 @@ function renderDetailView(folder) {
     parts.push(items.length === 1 ? "1 archive" : items.length + " archives");
     if (items.length) parts.push(formatSize(total) + " total");
     if (entry) parts.push("keeps " + (entry.retention_days || config.retention_days) + " days");
+    if (entry) parts.push(entry.s3 ? "S3 remote storage" : "local disk storage");
     if (entry && entry.excludes && entry.excludes.length)
         parts.push("excludes: " + entry.excludes.join(", "));
     if (isOther) parts.push("from folders no longer configured");
@@ -571,6 +582,15 @@ function archiveRow(item) {
     const tdName = document.createElement("td");
     tdName.className = "archive-name";
     tdName.textContent = item.name;
+
+    const storageBadge = document.createElement("span");
+    storageBadge.className = "storage-badge " + (item.remote ? "storage-s3" : "storage-local");
+    storageBadge.textContent = item.remote ? "S3" : "Local";
+    storageBadge.dataset.tooltip = item.remote
+        ? "Stored on the S3 bucket (restore downloads it automatically)"
+        : "Stored on the local destination disk";
+    tdName.appendChild(storageBadge);
+
     if (item.trigger === "catchup") {
         const info = document.createElement("span");
         info.className = "catchup-info";
@@ -594,7 +614,8 @@ function archiveRow(item) {
     const tdActions = document.createElement("td");
     tdActions.className = "cell-actions";
     tdActions.appendChild(iconButton("restore", "Restore", () => openRestoreDialog(item), "primary"));
-    tdActions.appendChild(iconButton("download", "Download", () => downloadArchive(item), "success"));
+    if (!item.remote)   // download streams the local file; remote ones live on S3
+        tdActions.appendChild(iconButton("download", "Download", () => downloadArchive(item), "success"));
     tdActions.appendChild(iconButton("trash", "Delete", () => openDeleteDialog(item.name), "danger"));
 
     tr.appendChild(tdName);
@@ -630,6 +651,11 @@ function openConfigDialog(idx) {
     $("config-excludes").value = idx === -1
         ? ""
         : (config.backups[idx].excludes || []).join("\n");
+    const storage = $("config-storage");
+    storage.value = (idx !== -1 && config.backups[idx].s3) ? "s3" : "local";
+    storage.querySelector('option[value="s3"]').disabled = !s3Ready();
+    $("config-storage-hint").hidden = s3Ready();
+    if (!s3Ready()) storage.value = "local";
     $("estimate-result").textContent = "";
     showConfigError(null);
     openModal("config-dialog");
@@ -666,10 +692,12 @@ function saveConfigEntry() {
         return;
     }
 
+    const useS3 = $("config-storage").value === "s3" && s3Ready();
     if (editingIndex === -1) {
         const entry = { folder, time, retention_days: retention };
         if (title) entry.title = title;
         if (excludes.length) entry.excludes = excludes;
+        if (useS3) entry.s3 = true;
         config.backups.push(entry);
     } else {
         const entry = { ...config.backups[editingIndex], folder, time, retention_days: retention };
@@ -677,6 +705,8 @@ function saveConfigEntry() {
         else delete entry.title;
         if (excludes.length) entry.excludes = excludes;
         else delete entry.excludes;
+        if (useS3) entry.s3 = true;
+        else delete entry.s3;
         config.backups[editingIndex] = entry;
     }
 
@@ -776,6 +806,81 @@ function saveSettings() {
         .then(() => toast("Settings saved", "success"))
         .catch(err => toast("Failed to save: " + errText(err), "danger"))
         .finally(() => setLoading(btn, false));
+}
+
+/* ---------- S3 remote storage ---------- */
+
+const S3_FIELD_IDS = ["s3-bucket", "s3-region", "s3-access-key", "s3-secret-key", "s3-prefix", "s3-endpoint"];
+
+function s3Ready() {
+    return !!(config.s3 && config.s3.enabled && config.s3.bucket);
+}
+
+function setIfNotFocused(id, value) {
+    const el = $(id);
+    if (document.activeElement !== el)
+        el.value = value;
+}
+
+function renderS3() {
+    const s3 = config.s3 || {};
+    if (document.activeElement !== $("s3-enabled"))
+        $("s3-enabled").checked = !!s3.enabled;
+    setIfNotFocused("s3-bucket", s3.bucket || "");
+    setIfNotFocused("s3-region", s3.region || "");
+    setIfNotFocused("s3-access-key", s3.access_key || "");
+    setIfNotFocused("s3-secret-key", s3.secret_key || "");
+    setIfNotFocused("s3-prefix", s3.prefix || "");
+    setIfNotFocused("s3-endpoint", s3.endpoint || "");
+    const badge = $("s3-badge");
+    badge.textContent = s3Ready() ? "Enabled" : "Disabled";
+    badge.className = "badge " + (s3Ready() ? "badge-on" : "badge-off");
+}
+
+function gatherS3() {
+    config.s3 = {
+        enabled: $("s3-enabled").checked,
+        bucket: $("s3-bucket").value.trim(),
+        region: $("s3-region").value.trim(),
+        access_key: $("s3-access-key").value.trim(),
+        secret_key: $("s3-secret-key").value,
+        prefix: $("s3-prefix").value.trim(),
+        endpoint: $("s3-endpoint").value.trim()
+    };
+}
+
+function saveS3(showToast) {
+    gatherS3();
+    if (config.s3.enabled && !config.s3.bucket) {
+        toast("Enter the bucket name to enable S3", "danger");
+        return Promise.reject(new Error("bucket missing"));
+    }
+    const btn = $("save-s3");
+    setLoading(btn, true);
+    return saveConfigFile()
+        .then(() => {
+            if (showToast !== false) toast("S3 settings saved", "success");
+            renderS3();
+        })
+        .catch(err => {
+            toast("Failed to save: " + errText(err), "danger");
+            throw err;
+        })
+        .finally(() => setLoading(btn, false));
+}
+
+function testS3() {
+    const btn = $("test-s3");
+    const result = $("s3-test-result");
+    // Save first so the backend tests exactly what is on screen
+    saveS3(false).then(() => {
+        setLoading(btn, true);
+        result.textContent = "Testing…";
+        cockpit.spawn([HELPER, "test-s3"], { superuser: "require", err: "message" })
+            .then(out => { result.textContent = out.trim(); })
+            .catch(err => { result.textContent = "Failed: " + errText(err); })
+            .finally(() => setLoading(btn, false));
+    }).catch(() => { /* save error already shown */ });
 }
 
 /* ---------- Timer engine check ---------- */
@@ -988,6 +1093,9 @@ document.addEventListener("DOMContentLoaded", () => {
     $("config-delete-confirm").addEventListener("click", confirmConfigDelete);
     $("estimate-size").addEventListener("click", estimateSize);
     $("save-settings").addEventListener("click", saveSettings);
+    $("save-s3").addEventListener("click", () => saveS3());
+    $("test-s3").addEventListener("click", testS3);
+    $("s3-enabled").addEventListener("change", () => saveS3());
 
     // Detail view
     $("back-btn").addEventListener("click", () => goTo(null));

@@ -1,15 +1,18 @@
 #!/bin/bash
 # cockpit-backup — helper for the Cockpit "Folder backup" plugin
-# Each configured folder is backed up to its own archive, on its own daily schedule:
-#   backup-<slug>-YYYYMMDD-HHMMSS.tar.gz  (+ .meta sidecar with folder and trigger)
+# Each configured folder is backed up to its own archive, on its own daily schedule.
+# Storage is per-folder: local disk (default) or Amazon S3 / S3-compatible remote.
+# Remote backups are built in a temp dir, uploaded, then removed locally; a .meta
+# stub in the destination keeps them visible in the UI (restore downloads them).
 # Subcommands:
 #   backup [FOLDER]           back up all configured folders, or a single one (trigger: manual)
 #   backup-due                back up folders whose daily time has passed (run by the timer)
 #   apply-schedule            regenerate the timer's OnCalendar entries from the config
-#   list                      JSON: archives (with folder/trigger) + backups currently running
+#   list                      JSON: archives (local+remote) + running backups + disk space
 #   estimate FOLDER [PAT...]  folder size honoring exclude patterns
-#   restore ARCHIVE [TARGET]  restore an archive (to / or to TARGET)
-#   delete ARCHIVE            delete an archive
+#   restore ARCHIVE [TARGET]  restore an archive (remote ones are downloaded first)
+#   delete ARCHIVE            delete an archive (local file and/or remote object)
+#   test-s3                   check that the configured S3 bucket is reachable
 #   log FOLDER                print the folder's backup log (last 500 lines)
 #   clear-log FOLDER          empty the folder's backup log
 set -euo pipefail
@@ -85,6 +88,72 @@ else:
 
 DEST=$(cfg_get destination /var/backups/cockpit-backup)
 RETENTION=$(cfg_get retention_days 30)
+REMOTE_TMP="$DEST/.tmp"
+
+# ---------- S3 remote storage ----------
+
+s3_cfg() {
+    python3 -c '
+import json, sys
+s3 = json.load(open(sys.argv[1])).get("s3") or {}
+print(s3.get(sys.argv[2], ""))
+' "$CONFIG" "$1"
+}
+
+s3_configured() {
+    [ "$(s3_cfg enabled)" = "True" ] && [ -n "$(s3_cfg bucket)" ]
+}
+
+# Run the aws CLI with credentials/region/endpoint from the configuration.
+# Credentials are passed via environment, never on the command line.
+s3_run() {
+    local -a args=("$@")
+    local region endpoint
+    region=$(s3_cfg region)
+    endpoint=$(s3_cfg endpoint)
+    [ -n "$region" ] && args+=(--region "$region")
+    [ -n "$endpoint" ] && args+=(--endpoint-url "$endpoint")
+    AWS_ACCESS_KEY_ID="$(s3_cfg access_key)" \
+    AWS_SECRET_ACCESS_KEY="$(s3_cfg secret_key)" \
+    aws "${args[@]}"
+}
+
+s3_key() {
+    local prefix
+    prefix=$(s3_cfg prefix)
+    prefix="${prefix#/}"
+    [ -n "$prefix" ] && prefix="${prefix%/}/"
+    echo "${prefix}$1"
+}
+
+# Best-effort removal of the remote copy when the local archive goes away
+s3_delete_remote() {
+    local name="$1"
+    s3_configured || return 0
+    command -v aws >/dev/null || return 0
+    s3_run s3 rm "s3://$(s3_cfg bucket)/$(s3_key "$name")" --only-show-errors 2>/dev/null || true
+}
+
+# Does this folder's configuration ask for S3 remote storage?
+wants_s3() {
+    python3 -c '
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for b in cfg.get("backups", []):
+    if b["folder"] == sys.argv[2]:
+        print(bool(b.get("s3")))
+        break
+else:
+    print(False)
+' "$CONFIG" "$1"
+}
+
+meta_is_remote() {
+    [ -f "$1" ] || return 1
+    [ "$(python3 -c 'import json,sys; print(bool(json.load(open(sys.argv[1])).get("remote")))' "$1")" = "True" ]
+}
+
+# ---------- Core backup ----------
 
 # The archive must live inside DEST and match the expected name: prevents path traversal
 archive_path() {
@@ -101,11 +170,29 @@ archive_path() {
 
 backup_one() {
     local folder="$1" stamp="$2" trigger="${3:-manual}"
-    local slug archive tmp rel start_ts
+    local slug name archive tmp workdir rel start_ts remote
     slug=$(slug_of "$folder")
-    archive="$DEST/backup-$slug-$stamp.tar.gz"
-    tmp="$archive.partial"
+    name="backup-$slug-$stamp.tar.gz"
+    archive="$DEST/$name"
     rel="${folder#/}"
+
+    remote="false"
+    if [ "$(wants_s3 "$folder")" = "True" ] && s3_configured; then
+        if command -v aws >/dev/null; then
+            remote="true"
+        else
+            echo "  WARNING: aws CLI not installed, storing locally instead" >&2
+            log_line "$folder" "$trigger" "S3 requested but aws CLI missing: storing locally"
+        fi
+    fi
+
+    # Remote backups are built in a temp dir and never land in the destination
+    workdir="$DEST"
+    if [ "$remote" = "true" ]; then
+        workdir="$REMOTE_TMP"
+        mkdir -p "$workdir"
+    fi
+    tmp="$workdir/$name.partial"
 
     # Per-folder exclusions: relative to the folder (or absolute), globs allowed.
     # Archive members are relative to /, so patterns are rebased accordingly.
@@ -123,13 +210,13 @@ backup_one() {
 
     echo "Backing up $folder"
     start_ts=$(date +%s)
-    log_line "$folder" "$trigger" "Backup started"
+    log_line "$folder" "$trigger" "Backup started$([ "$remote" = "true" ] && echo ' (S3 remote)')"
 
     # The .meta is written before tar starts: together with the .partial file it
     # marks an in-progress backup (reported by `list` as "running"). tar writes
-    # to .partial, renamed only on success: an interrupted or failed run never
-    # leaves a half-written archive visible in the UI.
-    python3 - "$archive.meta" "$folder" "$trigger" <<'EOF'
+    # to .partial: an interrupted or failed run never leaves a half-written
+    # archive visible in the UI.
+    python3 - "$workdir/$name.meta" "$folder" "$trigger" <<'EOF'
 import json, sys
 with open(sys.argv[1], "w") as f:
     json.dump({"folder": sys.argv[2], "trigger": sys.argv[3]}, f)
@@ -139,22 +226,57 @@ EOF
     CLEANUP_TRIGGER="$trigger"
     tar -czf "$tmp" ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
         2> >(grep -v 'Removing leading' >&2 || true)
-    mv "$tmp" "$archive"
-    CLEANUP_FILE=""
-    CLEANUP_FOLDER=""
 
-    local size dur
-    size=$(du -h "$archive" | cut -f1)
-    dur=$(( $(date +%s) - start_ts ))
-    log_line "$folder" "$trigger" "Completed: $(basename "$archive") ($size) in ${dur}s"
-    echo "  Archive: $archive"
-    echo "  Size: $size"
+    local size_h size_b dur
+    size_h=$(du -h "$tmp" | cut -f1)
+    size_b=$(wc -c < "$tmp" | tr -d ' ')
+
+    if [ "$remote" = "true" ]; then
+        local bucket key
+        bucket=$(s3_cfg bucket)
+        key=$(s3_key "$name")
+        echo "  Uploading to S3: s3://$bucket/$key ($size_h)"
+        if s3_run s3 cp "$tmp" "s3://$bucket/$key" --only-show-errors; then
+            # Meta stub in the destination keeps the remote archive visible in the UI
+            python3 - "$archive.meta" "$folder" "$trigger" "$size_b" <<'EOF'
+import json, sys, time
+with open(sys.argv[1], "w") as f:
+    json.dump({"folder": sys.argv[2], "trigger": sys.argv[3],
+               "remote": True, "s3": True,
+               "size": int(sys.argv[4]), "mtime": int(time.time())}, f)
+EOF
+            rm -f "$tmp" "$workdir/$name.meta"
+            CLEANUP_FILE=""
+            CLEANUP_FOLDER=""
+            dur=$(( $(date +%s) - start_ts ))
+            log_line "$folder" "$trigger" "Completed on S3: $name ($size_h) in ${dur}s"
+            echo "  Uploaded and removed locally."
+        else
+            # Upload failed: keep the data by falling back to local storage
+            mv "$tmp" "$archive"
+            mv "$workdir/$name.meta" "$archive.meta"
+            CLEANUP_FILE=""
+            CLEANUP_FOLDER=""
+            dur=$(( $(date +%s) - start_ts ))
+            log_line "$folder" "$trigger" "S3 upload FAILED: $name kept locally ($size_h)"
+            echo "  WARNING: S3 upload failed, archive kept locally" >&2
+        fi
+    else
+        mv "$tmp" "$archive"
+        CLEANUP_FILE=""
+        CLEANUP_FOLDER=""
+        dur=$(( $(date +%s) - start_ts ))
+        log_line "$folder" "$trigger" "Completed: $name ($size_h) in ${dur}s"
+        echo "  Archive: $archive"
+        echo "  Size: $size_h"
+    fi
 }
 
 prune() {
     # Remove backups older than each folder's retention (global default for the rest)
     echo "Pruning old backups…"
-    python3 - "$CONFIG" "$DEST" "$RETENTION" <<'EOF'
+    local out
+    out=$(python3 - "$CONFIG" "$DEST" "$RETENTION" <<'EOF'
 import json, os, glob, sys, time
 
 cfg = json.load(open(sys.argv[1]))
@@ -163,34 +285,67 @@ retentions = {b["folder"]: int(b.get("retention_days", default_ret))
               for b in cfg.get("backups", [])}
 now = time.time()
 
+def read_meta(path):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return {}
+
+# Local archives
 for arch in glob.glob(os.path.join(dest, "backup-*.tar.gz")):
-    meta = arch + ".meta"
-    folder = None
-    if os.path.exists(meta):
-        try:
-            folder = json.load(open(meta)).get("folder")
-        except Exception:
-            pass
-    ret = retentions.get(folder, default_ret)
+    meta = read_meta(arch + ".meta")
+    ret = retentions.get(meta.get("folder"), default_ret)
     if now - os.stat(arch).st_mtime > ret * 86400:
         os.remove(arch)
-        if os.path.exists(meta):
-            os.remove(meta)
+        if os.path.exists(arch + ".meta"):
+            os.remove(arch + ".meta")
         print("Removed:", os.path.basename(arch))
+
+# Expired remote archives (meta stubs): print for the shell to delete on S3
+for mp in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
+    meta = read_meta(mp)
+    if not meta.get("remote"):
+        continue
+    ret = retentions.get(meta.get("folder"), default_ret)
+    if now - meta.get("mtime", now) > ret * 86400:
+        print("RemoteExpired:", os.path.basename(mp)[:-5])
 
 # Leftovers from interrupted runs: stale .partial files and .meta sidecars
 # whose archive never materialized (age-guarded to spare in-flight backups)
-for p in glob.glob(os.path.join(dest, "backup-*.tar.gz.partial")):
-    if now - os.stat(p).st_mtime > 86400:
-        os.remove(p)
-        print("Removed stale partial:", os.path.basename(p))
-for meta in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
-    arch = meta[:-5]
-    if not os.path.exists(arch) and not os.path.exists(arch + ".partial") \
-            and now - os.stat(meta).st_mtime > 3600:
-        os.remove(meta)
-        print("Removed orphan meta:", os.path.basename(meta))
+for pat in ("backup-*.tar.gz.partial", os.path.join(".tmp", "backup-*.tar.gz.partial")):
+    for p in glob.glob(os.path.join(dest, pat)):
+        if now - os.stat(p).st_mtime > 86400:
+            os.remove(p)
+            print("Removed stale partial:", os.path.basename(p))
+for pat in ("backup-*.tar.gz.meta", os.path.join(".tmp", "backup-*.tar.gz.meta")):
+    for mp in glob.glob(os.path.join(dest, pat)):
+        meta = read_meta(mp)
+        if meta.get("remote"):
+            continue
+        arch = mp[:-5]
+        if not os.path.exists(arch) and not os.path.exists(arch + ".partial") \
+                and now - os.stat(mp).st_mtime > 3600:
+            os.remove(mp)
+            print("Removed orphan meta:", os.path.basename(mp))
 EOF
+)
+    if [ -n "$out" ]; then
+        echo "$out" | grep -v '^RemoteExpired: ' || true
+        # Delete expired remote objects and their meta stubs (best effort)
+        if s3_configured && command -v aws >/dev/null; then
+            echo "$out" | sed -n 's/^RemoteExpired: //p' | while IFS= read -r n; do
+                s3_delete_remote "$n"
+                rm -f "$DEST/$n.meta"
+                echo "Removed remote: $n"
+            done
+        fi
+        # Mirror local pruning of uploaded archives on the bucket
+        if s3_configured; then
+            echo "$out" | sed -n 's/^Removed: //p' | while IFS= read -r n; do
+                s3_delete_remote "$n"
+            done
+        fi
+    fi
     echo "Done."
 }
 
@@ -243,16 +398,23 @@ now = datetime.datetime.now()
 default_time = cfg.get("time", "02:00")
 
 newest = {}
-for meta in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
+for meta_path in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
     try:
-        folder = json.load(open(meta)).get("folder")
+        meta = json.load(open(meta_path))
     except Exception:
         continue
-    arch = meta[:-5]
-    if folder and os.path.exists(arch):
+    folder = meta.get("folder")
+    if not folder:
+        continue
+    arch = meta_path[:-5]
+    if meta.get("remote"):
+        m = meta.get("mtime", 0)
+    elif os.path.exists(arch):
         m = os.stat(arch).st_mtime
-        if m > newest.get(folder, 0):
-            newest[folder] = m
+    else:
+        continue
+    if m > newest.get(folder, 0):
+        newest[folder] = m
 
 for b in cfg.get("backups", []):
     if not b.get("enabled", True):
@@ -339,31 +501,52 @@ def read_meta(path):
         return {}
 
 archives = []
+seen = set()
 for p in glob.glob(os.path.join(dest, "backup-*.tar.gz")):
     st = os.stat(p)
-    meta = read_meta(p + ".meta") if os.path.exists(p + ".meta") else {}
+    meta = read_meta(p + ".meta")
+    seen.add(os.path.basename(p))
     archives.append({
         "name": os.path.basename(p),
         "size": st.st_size,
         "mtime": int(st.st_mtime),
         "folder": meta.get("folder"),
         "trigger": meta.get("trigger"),
+        "remote": False,
     })
+
+# Remote archives: meta stubs without a local file
+for mp in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
+    meta = read_meta(mp)
+    name = os.path.basename(mp)[:-5]
+    if not meta.get("remote") or name in seen:
+        continue
+    archives.append({
+        "name": name,
+        "size": meta.get("size", 0),
+        "mtime": meta.get("mtime", 0),
+        "folder": meta.get("folder"),
+        "trigger": meta.get("trigger"),
+        "remote": True,
+    })
+
 archives.sort(key=lambda x: x["mtime"], reverse=True)
 
 # In-progress backups: a .partial file plus the .meta written at start
+# (remote ones run inside .tmp/)
 running = []
-for p in glob.glob(os.path.join(dest, "backup-*.tar.gz.partial")):
-    meta_path = p[:-8] + ".meta"
-    if not os.path.exists(meta_path):
-        continue
-    meta = read_meta(meta_path)
-    if meta.get("folder"):
-        running.append({
-            "name": os.path.basename(p)[:-8],
-            "folder": meta.get("folder"),
-            "trigger": meta.get("trigger"),
-        })
+for pat in ("backup-*.tar.gz.partial", os.path.join(".tmp", "backup-*.tar.gz.partial")):
+    for p in glob.glob(os.path.join(dest, pat)):
+        meta_path = p[:-8] + ".meta"
+        if not os.path.exists(meta_path):
+            continue
+        meta = read_meta(meta_path)
+        if meta.get("folder"):
+            running.append({
+                "name": os.path.basename(p)[:-8],
+                "folder": meta.get("folder"),
+                "trigger": meta.get("trigger"),
+            })
 
 # Free space on the destination filesystem (nearest existing parent)
 p = dest
@@ -430,7 +613,6 @@ cmd_restore() {
     [ -n "$name" ] || die "usage: restore ARCHIVE [TARGET]"
     local archive
     archive=$(archive_path "$name")
-    [ -f "$archive" ] || die "archive not found: $archive"
 
     case "$target" in
         /*) ;;
@@ -438,8 +620,25 @@ cmd_restore() {
     esac
     mkdir -p "$target"
 
-    echo "Restoring $name to $target …"
-    tar -xzf "$archive" -C "$target"
+    if [ -f "$archive" ]; then
+        echo "Restoring $name to $target …"
+        tar -xzf "$archive" -C "$target"
+    elif meta_is_remote "$archive.meta"; then
+        s3_configured || die "archive is stored on S3 but S3 is not configured"
+        command -v aws >/dev/null || die "aws CLI is not installed"
+        local tmpd
+        tmpd=$(mktemp -d)
+        echo "Downloading from S3: $name …"
+        if ! s3_run s3 cp "s3://$(s3_cfg bucket)/$(s3_key "$name")" "$tmpd/$name" --only-show-errors; then
+            rm -rf "$tmpd"
+            die "download from S3 failed"
+        fi
+        echo "Restoring $name to $target …"
+        tar -xzf "$tmpd/$name" -C "$target"
+        rm -rf "$tmpd"
+    else
+        die "archive not found: $archive"
+    fi
     echo "Restore completed."
 }
 
@@ -448,9 +647,24 @@ cmd_delete() {
     [ -n "$name" ] || die "usage: delete ARCHIVE"
     local archive
     archive=$(archive_path "$name")
-    [ -f "$archive" ] || die "archive not found: $archive"
+
+    if [ ! -f "$archive" ] && [ ! -f "$archive.meta" ]; then
+        die "archive not found: $archive"
+    fi
+    if meta_is_remote "$archive.meta"; then
+        s3_delete_remote "$name"
+    fi
     rm -f "$archive" "$archive.meta"
     echo "Deleted: $name"
+}
+
+cmd_test_s3() {
+    s3_configured || die "S3 is not enabled or the bucket is not set (save the settings first)"
+    command -v aws >/dev/null || die "aws CLI is not installed (e.g. apt install awscli)"
+    local bucket
+    bucket=$(s3_cfg bucket)
+    s3_run s3 ls "s3://$bucket" --page-size 5 >/dev/null
+    echo "S3 connection OK: bucket '$bucket' is reachable"
 }
 
 cmd_log() {
@@ -478,10 +692,11 @@ case "${1:-}" in
     estimate)       shift; cmd_estimate "$@" ;;
     restore)        shift; cmd_restore "$@" ;;
     delete)         shift; cmd_delete "$@" ;;
+    test-s3)        cmd_test_s3 ;;
     log)            shift; cmd_log "$@" ;;
     clear-log)      shift; cmd_clear_log "$@" ;;
     *)
-        echo "Usage: $0 {backup [FOLDER]|backup-due|apply-schedule|list|estimate FOLDER [PATTERN...]|restore ARCHIVE [TARGET]|delete ARCHIVE|log FOLDER|clear-log FOLDER}" >&2
+        echo "Usage: $0 {backup [FOLDER]|backup-due|apply-schedule|list|estimate FOLDER [PATTERN...]|restore ARCHIVE [TARGET]|delete ARCHIVE|test-s3|log FOLDER|clear-log FOLDER}" >&2
         exit 2
         ;;
 esac

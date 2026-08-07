@@ -23,11 +23,16 @@ folder**, each with its own schedule, right from the web interface:
   page reloads and disappears only when the backup actually ends
 - **Catch-up marker**: archives created by recovering a missed schedule carry an
   info icon with an explanatory tooltip
+- **S3 remote storage**: per-folder choice between local disk and Amazon S3 (or any
+  S3-compatible service via custom endpoint). Remote backups are built in a temp
+  folder, uploaded and removed locally; the archive list shows a Local/S3 badge and
+  restore downloads them transparently
 
 ## Requirements
 
 - Linux with Cockpit installed (Debian/Ubuntu: `apt install cockpit` — Fedora/RHEL: `dnf install cockpit`)
 - `python3`, `tar`, `systemd` (preinstalled on every modern distro)
+- `aws` CLI (only for S3 remote storage — Debian/Ubuntu: `apt install awscli`)
 
 ## Installation
 
@@ -88,15 +93,39 @@ If you remove a configuration, its archives are **not** deleted: they remain vis
 in the "Other archives" section and can still be restored. Retention cleanup uses each
 folder's configured days (global default for orphaned archives).
 
+### S3 remote storage
+
+Enable it in the **Remote storage (S3)** card: bucket, region, credentials, and
+optionally a key prefix and a custom endpoint (MinIO, Backblaze B2, Wasabi, …).
+Then set a backup's **Storage** to "Amazon S3" in its add/edit dialog. How it works:
+
+- the archive is built in `<destination>/.tmp/`, uploaded with the `aws` CLI
+  (multipart for large files), then **removed from the local disk**
+- a small `.meta` stub keeps the remote archive visible in the UI (S3 badge);
+  **restore** downloads it to a temp dir transparently
+- if the upload fails, the archive is kept locally as a fallback (logged)
+- retention and manual deletions also remove the remote objects
+- credentials live in `/etc/cockpit-backup/config.json` (root-only, mode 600) and
+  are passed to `aws` via environment, never on the command line
+
 ### Configuration format
 
 ```json
 {
     "destination": "/var/backups/cockpit-backup",
     "retention_days": 30,
+    "s3": {
+        "enabled": true,
+        "bucket": "my-backup-bucket",
+        "region": "eu-south-1",
+        "prefix": "srv1/",
+        "endpoint": "",
+        "access_key": "AKIA…",
+        "secret_key": "…"
+    },
     "backups": [
         { "folder": "/etc", "time": "02:00", "retention_days": 30, "enabled": true,
-          "title": "System configuration" },
+          "title": "System configuration", "s3": true },
         { "folder": "/var/www", "time": "03:30", "retention_days": 14, "enabled": false,
           "excludes": ["cache", "logs/tmp", "*.log"], "title": "Web sites" }
     ]
@@ -119,6 +148,7 @@ sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh list
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh estimate /var/www cache '*.log'
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh restore backup-var-www-20260807-020000.tar.gz
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh restore backup-var-www-20260807-020000.tar.gz /tmp/test-restore
+sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh test-s3
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh log /var/www
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh clear-log /var/www
 ```

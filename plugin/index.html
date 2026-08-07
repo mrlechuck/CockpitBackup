@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=0.6.0">
+    <link rel="stylesheet" href="style.css?v=1.0.0">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -35,13 +35,70 @@
                 </h2>
                 <div class="settings-grid">
                     <div class="field">
-                        <label class="field-label" for="destination">Backup destination</label>
+                        <label class="field-label" for="destination">Local backup destination</label>
                         <input type="text" id="destination" placeholder="/var/backups/cockpit-backup"
                                spellcheck="false" autocomplete="off">
                     </div>
                 </div>
                 <div class="card-footer">
                     <button id="save-settings" class="btn btn-primary">Save settings</button>
+                </div>
+            </section>
+
+            <!-- Remote storage (S3) -->
+            <section class="card">
+                <div class="card-header">
+                    <h2 class="card-title">
+                        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 2a5 5 0 0 0-4.9 4.03A3.75 3.75 0 0 0 3.75 13.5h8.5a3.25 3.25 0 0 0 .53-6.46A5 5 0 0 0 8 2Z"/></svg>
+                        Remote storage (S3)
+                        <span id="s3-badge" class="badge badge-off">Disabled</span>
+                    </h2>
+                    <label class="switch" title="Enable or disable S3 remote storage">
+                        <input type="checkbox" id="s3-enabled">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <p class="muted small">Backups of folders set to S3 storage are built in a temporary
+                    folder, uploaded to the bucket and removed from the local disk. Requires the
+                    <code>aws</code> CLI on the server. S3-compatible services work via the custom endpoint.</p>
+
+                <div id="s3-fields">
+                    <div class="field-grid-2">
+                        <div class="field">
+                            <label class="field-label" for="s3-bucket">Bucket</label>
+                            <input type="text" id="s3-bucket" placeholder="my-backup-bucket"
+                                   spellcheck="false" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label class="field-label" for="s3-region">Region</label>
+                            <input type="text" id="s3-region" placeholder="eu-south-1"
+                                   spellcheck="false" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label class="field-label" for="s3-access-key">Access key ID</label>
+                            <input type="text" id="s3-access-key" spellcheck="false" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label class="field-label" for="s3-secret-key">Secret access key</label>
+                            <input type="password" id="s3-secret-key" autocomplete="new-password">
+                        </div>
+                        <div class="field">
+                            <label class="field-label" for="s3-prefix">Key prefix <span class="muted">(optional)</span></label>
+                            <input type="text" id="s3-prefix" placeholder="cockpit-backup/"
+                                   spellcheck="false" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label class="field-label" for="s3-endpoint">Custom endpoint <span class="muted">(optional)</span></label>
+                            <input type="text" id="s3-endpoint" placeholder="https://s3.example.com"
+                                   spellcheck="false" autocomplete="off">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card-footer">
+                    <button id="save-s3" class="btn btn-primary">Save S3 settings</button>
+                    <button id="test-s3" class="btn">Test connection</button>
+                    <span id="s3-test-result" class="muted small"></span>
                 </div>
             </section>
 
@@ -200,6 +257,15 @@
                     </div>
                 </div>
                 <div class="field">
+                    <label class="field-label" for="config-storage">Storage</label>
+                    <select id="config-storage">
+                        <option value="local">Local disk</option>
+                        <option value="s3">Amazon S3 (remote)</option>
+                    </select>
+                    <p id="config-storage-hint" class="field-hint muted" hidden>
+                        Enable and configure S3 in “Remote storage” to use remote backups.</p>
+                </div>
+                <div class="field">
                     <label class="field-label" for="config-excludes">Exclude from backup <span class="muted">(optional)</span></label>
                     <textarea id="config-excludes" rows="3" spellcheck="false"
                               placeholder="cache&#10;logs/tmp&#10;*.log"></textarea>
@@ -303,6 +369,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=0.6.0"></script>
+    <script src="app.js?v=1.0.0"></script>
 </body>
 </html>
