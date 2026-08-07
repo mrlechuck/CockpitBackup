@@ -22,14 +22,33 @@ if (typeof cockpit === "undefined") {
         };
         const now = Math.floor(Date.now() / 1000);
         const mockArchives = [
-            { name: "backup-etc-20260807-020000.tar.gz", size: 12400000, mtime: now - 3600 * 7, folder: "/etc" },
-            { name: "backup-etc-20260806-020000.tar.gz", size: 12300000, mtime: now - 3600 * 31, folder: "/etc" },
-            { name: "backup-home-roberto-documents-20260807-020000.tar.gz", size: 734003200, mtime: now - 3600 * 7, folder: "/home/roberto/documents" },
-            { name: "backup-home-roberto-documents-20260806-020000.tar.gz", size: 731906048, mtime: now - 3600 * 31, folder: "/home/roberto/documents" },
-            { name: "backup-home-roberto-documents-20260805-020000.tar.gz", size: 729808896, mtime: now - 3600 * 55, folder: "/home/roberto/documents" },
-            { name: "backup-var-www-20260807-020000.tar.gz", size: 220043200, mtime: now - 3600 * 7, folder: "/var/www" },
+            { name: "backup-etc-20260807-020000.tar.gz", size: 12400000, mtime: now - 3600 * 7, folder: "/etc", trigger: "scheduled" },
+            { name: "backup-etc-20260806-020000.tar.gz", size: 12300000, mtime: now - 3600 * 31, folder: "/etc", trigger: "catchup" },
+            { name: "backup-home-roberto-documents-20260807-020000.tar.gz", size: 734003200, mtime: now - 3600 * 7, folder: "/home/roberto/documents", trigger: "scheduled" },
+            { name: "backup-home-roberto-documents-20260806-020000.tar.gz", size: 731906048, mtime: now - 3600 * 31, folder: "/home/roberto/documents", trigger: "manual" },
+            { name: "backup-home-roberto-documents-20260805-020000.tar.gz", size: 729808896, mtime: now - 3600 * 55, folder: "/home/roberto/documents", trigger: "catchup" },
+            { name: "backup-var-www-20260807-020000.tar.gz", size: 220043200, mtime: now - 3600 * 7, folder: "/var/www", trigger: "scheduled" },
             { name: "backup-20260801-020000.tar.gz", size: 903100000, mtime: now - 3600 * 150, folder: null }
         ];
+        const mockRunning = [];
+        const mockLogs = {
+            "/etc": "2026-08-06 02:00:01 [scheduled] Backup started\n" +
+                "2026-08-06 02:00:24 [scheduled] Completed: backup-etc-20260806-020000.tar.gz (12M) in 23s\n" +
+                "2026-08-07 02:00:01 [scheduled] Backup started\n" +
+                "2026-08-07 02:00:26 [scheduled] Completed: backup-etc-20260807-020000.tar.gz (12M) in 25s\n"
+        };
+        // For manual testing: simulate a scheduled backup starting on a folder
+        window.__simulateScheduled = function (folder, seconds) {
+            mockRunning.push({ name: "backup-sim.tar.gz", folder, trigger: "scheduled" });
+            setTimeout(() => {
+                const i = mockRunning.findIndex(r => r.folder === folder);
+                if (i !== -1) mockRunning.splice(i, 1);
+                mockArchives.unshift({
+                    name: "backup-sim-" + Date.now() + ".tar.gz", size: 5000000,
+                    mtime: Math.floor(Date.now() / 1000), folder, trigger: "scheduled"
+                });
+            }, (seconds || 12) * 1000);
+        };
         function promiseWith(fns) {
             let streamCb = null;
             const p = new Promise(fns.run ? (res, rej) => fns.run(res, rej, d => streamCb && streamCb(d)) : r => r(fns.out || ""));
@@ -46,18 +65,34 @@ if (typeof cockpit === "undefined") {
                 if (cmd.includes("systemctl show"))
                     return promiseWith({ out: "UnitFileState=enabled\nActiveState=active\nNextElapseUSecRealtime=Fri 2026-08-08 02:00:00 CEST\n" });
                 if (args[1] === "list")
-                    return promiseWith({ out: JSON.stringify(mockArchives) });
+                    return promiseWith({ out: JSON.stringify({
+                        archives: mockArchives,
+                        running: mockRunning,
+                        disk: { free: window.__mockDiskFree || 46500000000, total: 250000000000 }
+                    }) });
+                if (args[1] === "log")
+                    return promiseWith({ out: mockLogs[args[2]] || "" });
+                if (args[1] === "clear-log") {
+                    mockLogs[args[2]] = "";
+                    return promiseWith({ out: "Log cleared.\n" });
+                }
                 if (args[1] === "backup")
                     return promiseWith({
                         run: (res, rej, stream) => {
                             const folder = args[2] || "/etc";
+                            mockRunning.push({ name: "backup-manual.tar.gz", folder, trigger: "manual" });
                             const lines = ["Backing up " + folder,
                                 "  Archive: /var/backups/cockpit-backup/backup-…-20260807-091500.tar.gz",
                                 "  Size: 700M", "Removing backups older than retention…", "Done."];
                             let i = 0;
                             const t = setInterval(() => {
                                 if (i < lines.length) stream(lines[i++] + "\n");
-                                else { clearInterval(t); res(); }
+                                else {
+                                    clearInterval(t);
+                                    const idx = mockRunning.findIndex(r => r.folder === folder && r.trigger === "manual");
+                                    if (idx !== -1) mockRunning.splice(idx, 1);
+                                    res();
+                                }
                             }, 350);
                         }
                     });
@@ -100,6 +135,9 @@ function entryTime(b) { return b.time || config.time || DEFAULT_TIME; }
 
 let config = { ...DEFAULT_CONFIG };
 let archives = [];
+let disk = null;           // destination filesystem usage (from `list`)
+let running = [];          // backups currently in progress (from `list`)
+let runningPrev = new Map(); // folder -> trigger, for start/finish notifications
 let archivesLoaded = false;
 
 let editingIndex = -1;      // config being edited in the modal (-1 = new)
@@ -134,7 +172,8 @@ const ICONS = {
     edit: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.609Zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354l-1.086-1.086ZM11.189 6.25 9.75 4.81l-6.286 6.287a.25.25 0 0 0-.064.108l-.558 1.953 1.953-.558a.25.25 0 0 0 .108-.064l6.286-6.286Z"/></svg>',
     trash: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25ZM11 3V1.75A1.75 1.75 0 0 0 9.25 0h-2.5A1.75 1.75 0 0 0 5 1.75V3H2.75a.75.75 0 0 0 0 1.5h.3l.815 8.15A1.5 1.5 0 0 0 5.357 14h5.285a1.5 1.5 0 0 0 1.493-1.35l.815-8.15h.3a.75.75 0 0 0 0-1.5H11Zm.14 1.5H4.86l.8 7.995c.013.127.12.255.249.255h5.285c.129 0 .236-.128.249-.255l.8-7.995Z"/></svg>',
     restore: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a7 7 0 1 1-6.95 7.85.75.75 0 0 1 1.49-.19 5.5 5.5 0 1 0 1.37-4.37L5.53 5.9a.75.75 0 0 1-.53 1.28H1.75A.75.75 0 0 1 1 6.43V3.18a.75.75 0 0 1 1.28-.53l1.06 1.06A6.98 6.98 0 0 1 8 1Zm-.75 3.5a.75.75 0 0 1 1.5 0v3.19l2.03 2.03a.75.75 0 1 1-1.06 1.06L7.47 8.53a.75.75 0 0 1-.22-.53V4.5Z"/></svg>',
-    download: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a.75.75 0 0 1 .75.75v6.69l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1ZM2.75 13a.75.75 0 0 0 0 1.5h10.5a.75.75 0 0 0 0-1.5H2.75Z"/></svg>'
+    download: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a.75.75 0 0 1 .75.75v6.69l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1ZM2.75 13a.75.75 0 0 0 0 1.5h10.5a.75.75 0 0 0 0-1.5H2.75Z"/></svg>',
+    info: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm9-3a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM6.75 7h1.5a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1 0-1.5h.5V8.5h-.5a.75.75 0 0 1 0-1.5Z"/></svg>'
 };
 
 function iconButton(icon, tooltip, onClick, variant) {
@@ -219,17 +258,53 @@ function loadConfig() {
         .catch(() => { config = { ...DEFAULT_CONFIG }; });
 }
 
+function displayName(folder) {
+    const entry = config.backups.find(b => b.folder === folder);
+    return (entry && entry.title) || folder;
+}
+
+/* Toast when an automatic backup starts or finishes (manual ones already
+ * give feedback through their own button/console). */
+function notifyRunningTransitions() {
+    const current = new Map(running.map(r => [r.folder, r.trigger || "manual"]));
+    current.forEach((trig, folder) => {
+        if (!runningPrev.has(folder) && trig !== "manual")
+            toast("Automatic backup in progress: " + displayName(folder), "info");
+    });
+    runningPrev.forEach((trig, folder) => {
+        if (!current.has(folder) && trig !== "manual")
+            toast("Backup finished: " + displayName(folder), "success");
+    });
+    runningPrev = current;
+}
+
 function refreshArchives() {
     return cockpit.spawn([HELPER, "list"], { superuser: "try", err: "message" })
         .then(out => {
-            try { archives = JSON.parse(out); } catch (e) { archives = []; }
+            let data;
+            try { data = JSON.parse(out); } catch (e) { data = []; }
+            if (Array.isArray(data)) {          // older backend: plain archive list
+                archives = data;
+                running = [];
+                disk = null;
+            } else {
+                archives = data.archives || [];
+                running = data.running || [];
+                disk = data.disk || null;
+            }
             archivesLoaded = true;
+            notifyRunningTransitions();
         })
         .catch(err => {
             archives = [];
+            running = [];
             archivesLoaded = true;
             toast("Failed to load archives: " + errText(err), "danger");
         });
+}
+
+function isRunning(folder) {
+    return running.some(r => r.folder === folder);
 }
 
 function archivesFor(folder) {
@@ -243,7 +318,9 @@ function archivesFor(folder) {
 /* ---------- List view ---------- */
 
 function renderListView() {
-    $("destination").value = config.destination;
+    const destInput = $("destination");
+    if (document.activeElement !== destInput)   // don't clobber while typing
+        destInput.value = config.destination;
     checkTimerEngine();
 
     $("config-loading").hidden = true;
@@ -258,6 +335,17 @@ function renderListView() {
     // Overall disk usage of every archive in the destination (orphans included)
     const grandTotal = archives.reduce((s, a) => s + a.size, 0);
     $("config-total").textContent = archives.length > 0 ? formatSize(grandTotal) + " total" : "";
+
+    // Free space on the destination disk, red when below 10 GB
+    const diskEl = $("disk-free");
+    if (disk && typeof disk.free === "number") {
+        const low = disk.free < 10 * 1024 * 1024 * 1024;
+        diskEl.textContent = "· " + formatSize(disk.free) + " free on disk";
+        diskEl.classList.toggle("disk-low", low);
+        diskEl.hidden = false;
+    } else {
+        diskEl.hidden = true;
+    }
 
     const orphans = archivesLoaded ? archivesFor(OTHER) : [];
     const empty = config.backups.length === 0 && orphans.length === 0;
@@ -328,6 +416,12 @@ function configRow(b, idx) {
 
     const actions = document.createElement("div");
     actions.className = "config-actions";
+    if (isRunning(b.folder)) {
+        const spin = document.createElement("span");
+        spin.className = "row-spinner";
+        spin.dataset.tooltip = "Backup in progress…";
+        actions.appendChild(spin);
+    }
     actions.appendChild(stats);
 
     const toggleWrap = document.createElement("label");
@@ -436,6 +530,14 @@ function renderDetailView(folder) {
     pathEl.hidden = isOther || !(entry && entry.title);
     pathEl.textContent = pathEl.hidden ? "" : folder;
 
+    // While a backup of this folder is in progress, block a second manual run
+    $("detail-backup-now").disabled = !isOther && isRunning(folder);
+
+    // Backup log (per configured folder only)
+    $("detail-log-card").hidden = isOther || !entry;
+    if (!isOther && entry)
+        loadLog(folder);
+
     const items = archivesFor(folder);
     const total = items.reduce((s, a) => s + a.size, 0);
     const parts = [];
@@ -469,6 +571,13 @@ function archiveRow(item) {
     const tdName = document.createElement("td");
     tdName.className = "archive-name";
     tdName.textContent = item.name;
+    if (item.trigger === "catchup") {
+        const info = document.createElement("span");
+        info.className = "catchup-info";
+        info.dataset.tooltip = "Catch-up backup: the scheduled time was missed, so it ran later";
+        info.innerHTML = ICONS.info;
+        tdName.appendChild(info);
+    }
 
     const tdDate = document.createElement("td");
     tdDate.textContent = new Date(item.mtime * 1000).toLocaleString("en-US",
@@ -717,6 +826,37 @@ function runBackup(folder, btn, consoleWrap, consoleOut) {
     proc.finally(() => setLoading(btn, false));
 }
 
+/* ---------- Backup log ---------- */
+
+function loadLog(folder) {
+    const body = $("log-body");
+    cockpit.spawn([HELPER, "log", folder], { superuser: "try", err: "message" })
+        .then(out => {
+            const text = out.trim();
+            body.classList.toggle("muted", !text);
+            body.textContent = text || "No log entries yet.";
+            body.scrollTop = body.scrollHeight;
+        })
+        .catch(err => {
+            body.classList.add("muted");
+            body.textContent = "Could not load the log: " + errText(err);
+        });
+}
+
+function clearLog() {
+    const folder = currentRoute();
+    if (!folder || folder === OTHER) return;
+    const btn = $("log-clear");
+    setLoading(btn, true);
+    cockpit.spawn([HELPER, "clear-log", folder], { superuser: "require", err: "message" })
+        .then(() => {
+            toast("Log cleared", "success");
+            loadLog(folder);
+        })
+        .catch(err => toast("Failed to clear the log: " + errText(err), "danger"))
+        .finally(() => setLoading(btn, false));
+}
+
 /* ---------- Archive download ---------- */
 
 /* Streams the archive through a Cockpit fsread1 channel: the browser downloads
@@ -872,7 +1012,33 @@ document.addEventListener("DOMContentLoaded", () => {
             document.querySelectorAll(".modal-backdrop").forEach(m => { m.hidden = true; });
     });
 
+    // Log card
+    $("log-refresh").addEventListener("click", () => {
+        const folder = currentRoute();
+        if (folder && folder !== OTHER) loadLog(folder);
+    });
+    $("log-clear").addEventListener("click", clearLog);
+
     window.addEventListener("hashchange", render);
 
-    Promise.all([loadConfig(), refreshArchives()]).then(render);
+    let lastSig = "";
+    function renderIfChanged() {
+        const sig = JSON.stringify({ a: archives, r: running, d: disk });
+        if (sig !== lastSig) {
+            lastSig = sig;
+            render();
+        }
+    }
+
+    Promise.all([loadConfig(), refreshArchives()]).then(() => {
+        lastSig = JSON.stringify({ a: archives, r: running, d: disk });
+        render();
+    });
+
+    // Keep the view in sync with backups started elsewhere (timer, other tabs):
+    // the .partial+meta marker on the server survives page reloads, so the
+    // spinner stays until the backup actually finishes.
+    setInterval(() => {
+        refreshArchives().then(renderIfChanged);
+    }, 8000);
 });

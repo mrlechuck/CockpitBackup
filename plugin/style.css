@@ -297,6 +297,15 @@ h2 {
     /* desaturated green: success blended toward gray, adapts to both themes */
     color: color-mix(in srgb, var(--success) 60%, var(--text-muted));
 }
+.disk-free {
+    font-size: 12.5px;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+.disk-free.disk-low {
+    color: var(--danger);
+    font-weight: 700;
+}
 
 /* ---------- Form ---------- */
 
@@ -671,6 +680,27 @@ input:disabled { opacity: 0.55; cursor: not-allowed; }
     animation: spin 0.7s linear infinite;
 }
 
+/* Small animated indicator on a config row while its backup runs */
+.row-spinner {
+    width: 15px;
+    height: 15px;
+    border: 2px solid var(--border-light);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+    margin-right: 0.2rem;
+}
+
+/* Info icon on catch-up archives */
+.catchup-info {
+    display: inline-flex;
+    vertical-align: -2px;
+    margin-left: 0.45rem;
+    color: var(--warning);
+}
+.catchup-info .icon { width: 13px; height: 13px; }
+
 /* ---------- Console output ---------- */
 
 .console {
@@ -712,6 +742,21 @@ input:disabled { opacity: 0.55; cursor: not-allowed; }
     overflow: auto;
     white-space: pre-wrap;
 }
+
+/* ---------- Backup log ---------- */
+
+.log-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.log-body {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    max-height: 280px;
+    min-height: 60px;
+}
+.log-body.muted { color: var(--text-muted); }
 
 /* ---------- Modali ---------- */
 

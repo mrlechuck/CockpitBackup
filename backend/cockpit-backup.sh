@@ -1,27 +1,43 @@
 #!/bin/bash
 # cockpit-backup — helper for the Cockpit "Folder backup" plugin
 # Each configured folder is backed up to its own archive, on its own daily schedule:
-#   backup-<slug>-YYYYMMDD-HHMMSS.tar.gz  (+ .meta sidecar with the original path)
+#   backup-<slug>-YYYYMMDD-HHMMSS.tar.gz  (+ .meta sidecar with folder and trigger)
 # Subcommands:
-#   backup [FOLDER]           back up all configured folders, or a single one
+#   backup [FOLDER]           back up all configured folders, or a single one (trigger: manual)
 #   backup-due                back up folders whose daily time has passed (run by the timer)
 #   apply-schedule            regenerate the timer's OnCalendar entries from the config
-#   list                      list existing archives as JSON (with original folder)
+#   list                      JSON: archives (with folder/trigger) + backups currently running
+#   estimate FOLDER [PAT...]  folder size honoring exclude patterns
 #   restore ARCHIVE [TARGET]  restore an archive (to / or to TARGET)
 #   delete ARCHIVE            delete an archive
+#   log FOLDER                print the folder's backup log (last 500 lines)
+#   clear-log FOLDER          empty the folder's backup log
 set -euo pipefail
 
 CONFIG="${COCKPIT_BACKUP_CONFIG:-/etc/cockpit-backup/config.json}"
 DROPIN_DIR="${COCKPIT_BACKUP_DROPIN:-/etc/systemd/system/cockpit-backup.timer.d}"
+LOG_DIR="${COCKPIT_BACKUP_LOGDIR:-/var/log/cockpit-backup}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
+
+slug_of() { printf '%s' "${1#/}" | tr -c 'A-Za-z0-9._-' '-'; }
+
+log_line() {
+    # log_line FOLDER TRIGGER MESSAGE
+    mkdir -p "$LOG_DIR"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$2] $3" >> "$LOG_DIR/$(slug_of "$1").log"
+}
 
 # If a backup is interrupted (page closed, tar failure, signal), remove the
 # in-flight partial file and its metadata so no orphan archive is left behind.
 CLEANUP_FILE=""
+CLEANUP_FOLDER=""
+CLEANUP_TRIGGER=""
 cleanup() {
     if [ -n "$CLEANUP_FILE" ]; then
         rm -f "$CLEANUP_FILE" "${CLEANUP_FILE%.partial}.meta"
+        [ -n "$CLEANUP_FOLDER" ] && \
+            log_line "$CLEANUP_FOLDER" "${CLEANUP_TRIGGER:-manual}" "Backup failed or was interrupted" || true
         CLEANUP_FILE=""
     fi
 }
@@ -84,9 +100,9 @@ archive_path() {
 }
 
 backup_one() {
-    local folder="$1" stamp="$2"
-    local slug archive tmp rel
-    slug=$(printf '%s' "${folder#/}" | tr -c 'A-Za-z0-9._-' '-')
+    local folder="$1" stamp="$2" trigger="${3:-manual}"
+    local slug archive tmp rel start_ts
+    slug=$(slug_of "$folder")
     archive="$DEST/backup-$slug-$stamp.tar.gz"
     tmp="$archive.partial"
     rel="${folder#/}"
@@ -106,20 +122,33 @@ backup_one() {
     done < <(cfg_excludes "$folder")
 
     echo "Backing up $folder"
-    # Write to a .partial file and rename only on success: an interrupted or
-    # failed run never leaves a half-written archive visible in the UI.
-    CLEANUP_FILE="$tmp"
-    tar -czf "$tmp" ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
-        2> >(grep -v 'Removing leading' >&2 || true)
-    python3 - "$archive.meta" "$folder" <<'EOF'
+    start_ts=$(date +%s)
+    log_line "$folder" "$trigger" "Backup started"
+
+    # The .meta is written before tar starts: together with the .partial file it
+    # marks an in-progress backup (reported by `list` as "running"). tar writes
+    # to .partial, renamed only on success: an interrupted or failed run never
+    # leaves a half-written archive visible in the UI.
+    python3 - "$archive.meta" "$folder" "$trigger" <<'EOF'
 import json, sys
 with open(sys.argv[1], "w") as f:
-    json.dump({"folder": sys.argv[2]}, f)
+    json.dump({"folder": sys.argv[2], "trigger": sys.argv[3]}, f)
 EOF
+    CLEANUP_FILE="$tmp"
+    CLEANUP_FOLDER="$folder"
+    CLEANUP_TRIGGER="$trigger"
+    tar -czf "$tmp" ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
+        2> >(grep -v 'Removing leading' >&2 || true)
     mv "$tmp" "$archive"
     CLEANUP_FILE=""
+    CLEANUP_FOLDER=""
+
+    local size dur
+    size=$(du -h "$archive" | cut -f1)
+    dur=$(( $(date +%s) - start_ts ))
+    log_line "$folder" "$trigger" "Completed: $(basename "$archive") ($size) in ${dur}s"
     echo "  Archive: $archive"
-    echo "  Size: $(du -h "$archive" | cut -f1)"
+    echo "  Size: $size"
 }
 
 prune() {
@@ -156,7 +185,9 @@ for p in glob.glob(os.path.join(dest, "backup-*.tar.gz.partial")):
         os.remove(p)
         print("Removed stale partial:", os.path.basename(p))
 for meta in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
-    if not os.path.exists(meta[:-5]) and now - os.stat(meta).st_mtime > 3600:
+    arch = meta[:-5]
+    if not os.path.exists(arch) and not os.path.exists(arch + ".partial") \
+            and now - os.stat(meta).st_mtime > 3600:
         os.remove(meta)
         print("Removed orphan meta:", os.path.basename(meta))
 EOF
@@ -187,7 +218,7 @@ cmd_backup() {
             echo "WARNING: $folder does not exist, skipping" >&2
             continue
         fi
-        backup_one "$folder" "$stamp"
+        backup_one "$folder" "$stamp" "manual"
         count=$((count + 1))
     done < <(cfg_folders)
 
@@ -197,8 +228,9 @@ cmd_backup() {
 
 # Called by the systemd timer at each configured time. A folder is due when its
 # daily time has passed and its newest archive is older than that scheduled
-# moment — so missed runs (server off) are caught up at the next firing
-# (Persistent=true also fires once at boot for missed schedules).
+# moment. Trigger is "scheduled" when we are within a few minutes of the exact
+# time, "catchup" when a missed occurrence is being recovered (server was off,
+# schedule changed, or the folder is new).
 cmd_backup_due() {
     mkdir -p "$DEST"
     local due
@@ -234,14 +266,15 @@ for b in cfg.get("backups", []):
     if now < sched:
         sched -= datetime.timedelta(days=1)   # last scheduled occurrence
     if newest.get(b["folder"], 0) < sched.timestamp():
-        print(b["folder"])
+        trigger = "scheduled" if (now - sched).total_seconds() <= 180 else "catchup"
+        print(trigger + "\t" + b["folder"])
 EOF
 )
     [ -n "$due" ] || exit 0
 
-    local stamp count=0
+    local stamp count=0 trigger folder
     stamp=$(date +%Y%m%d-%H%M%S)
-    while IFS= read -r folder; do
+    while IFS=$'\t' read -r trigger folder; do
         [ -n "$folder" ] || continue
         if [ "$folder" = "/" ]; then
             echo "WARNING: / cannot be backed up, skipping" >&2
@@ -251,11 +284,99 @@ EOF
             echo "WARNING: $folder does not exist, skipping" >&2
             continue
         fi
-        backup_one "$folder" "$stamp"
+        backup_one "$folder" "$stamp" "$trigger"
         count=$((count + 1))
     done <<< "$due"
 
     [ "$count" -eq 0 ] || prune
+}
+
+# Regenerate the timer schedule: one OnCalendar entry per distinct configured
+# time (enabled folders only). Called by the UI after every config change.
+cmd_apply_schedule() {
+    mkdir -p "$DROPIN_DIR"
+    {
+        echo "[Timer]"
+        echo "OnCalendar="   # reset the base unit's default
+        python3 - "$CONFIG" <<'EOF'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+default = cfg.get("time", "02:00")
+times = set()
+for b in cfg.get("backups", []):
+    if not b.get("enabled", True):
+        continue
+    t = b.get("time") or default
+    try:
+        hh, mm = t.split(":")
+        times.add("%02d:%02d" % (int(hh), int(mm)))
+    except ValueError:
+        pass
+if not times:
+    # keep the timer valid even with nothing enabled; backup-due just no-ops
+    times.add("03:00")
+for t in sorted(times):
+    print("OnCalendar=*-*-* %s:00" % t)
+EOF
+    } > "$DROPIN_DIR/override.conf"
+    systemctl daemon-reload
+    if systemctl is-active --quiet cockpit-backup.timer; then
+        systemctl restart cockpit-backup.timer
+    fi
+    echo "Schedule applied:"
+    grep '^OnCalendar=..' "$DROPIN_DIR/override.conf" || true
+}
+
+cmd_list() {
+    python3 -c '
+import json, os, glob, sys, shutil
+dest = sys.argv[1]
+
+def read_meta(path):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return {}
+
+archives = []
+for p in glob.glob(os.path.join(dest, "backup-*.tar.gz")):
+    st = os.stat(p)
+    meta = read_meta(p + ".meta") if os.path.exists(p + ".meta") else {}
+    archives.append({
+        "name": os.path.basename(p),
+        "size": st.st_size,
+        "mtime": int(st.st_mtime),
+        "folder": meta.get("folder"),
+        "trigger": meta.get("trigger"),
+    })
+archives.sort(key=lambda x: x["mtime"], reverse=True)
+
+# In-progress backups: a .partial file plus the .meta written at start
+running = []
+for p in glob.glob(os.path.join(dest, "backup-*.tar.gz.partial")):
+    meta_path = p[:-8] + ".meta"
+    if not os.path.exists(meta_path):
+        continue
+    meta = read_meta(meta_path)
+    if meta.get("folder"):
+        running.append({
+            "name": os.path.basename(p)[:-8],
+            "folder": meta.get("folder"),
+            "trigger": meta.get("trigger"),
+        })
+
+# Free space on the destination filesystem (nearest existing parent)
+p = dest
+while p and not os.path.exists(p):
+    p = os.path.dirname(p)
+try:
+    du = shutil.disk_usage(p or "/")
+    disk = {"free": du.free, "total": du.total}
+except Exception:
+    disk = None
+
+print(json.dumps({"archives": archives, "running": running, "disk": disk}))
+' "$DEST"
 }
 
 # Size of a folder honoring exclude patterns (same semantics as the backup).
@@ -304,67 +425,6 @@ print(json.dumps({"bytes": total, "files": files}))
 EOF
 }
 
-# Regenerate the timer schedule: one OnCalendar entry per distinct configured
-# time (enabled folders only). Called by the UI after every config change.
-cmd_apply_schedule() {
-    mkdir -p "$DROPIN_DIR"
-    {
-        echo "[Timer]"
-        echo "OnCalendar="   # reset the base unit's default
-        python3 - "$CONFIG" <<'EOF'
-import json, sys
-cfg = json.load(open(sys.argv[1]))
-default = cfg.get("time", "02:00")
-times = set()
-for b in cfg.get("backups", []):
-    if not b.get("enabled", True):
-        continue
-    t = b.get("time") or default
-    try:
-        hh, mm = t.split(":")
-        times.add("%02d:%02d" % (int(hh), int(mm)))
-    except ValueError:
-        pass
-if not times:
-    # keep the timer valid even with nothing enabled; backup-due just no-ops
-    times.add("03:00")
-for t in sorted(times):
-    print("OnCalendar=*-*-* %s:00" % t)
-EOF
-    } > "$DROPIN_DIR/override.conf"
-    systemctl daemon-reload
-    if systemctl is-active --quiet cockpit-backup.timer; then
-        systemctl restart cockpit-backup.timer
-    fi
-    echo "Schedule applied:"
-    grep '^OnCalendar=..' "$DROPIN_DIR/override.conf" || true
-}
-
-cmd_list() {
-    python3 -c '
-import json, os, glob, sys
-dest = sys.argv[1]
-items = []
-for p in glob.glob(os.path.join(dest, "backup-*.tar.gz")):
-    st = os.stat(p)
-    folder = None
-    meta = p + ".meta"
-    if os.path.exists(meta):
-        try:
-            folder = json.load(open(meta)).get("folder")
-        except Exception:
-            pass
-    items.append({
-        "name": os.path.basename(p),
-        "size": st.st_size,
-        "mtime": int(st.st_mtime),
-        "folder": folder,
-    })
-items.sort(key=lambda x: x["mtime"], reverse=True)
-print(json.dumps(items))
-' "$DEST"
-}
-
 cmd_restore() {
     local name="${1:-}" target="${2:-/}"
     [ -n "$name" ] || die "usage: restore ARCHIVE [TARGET]"
@@ -393,16 +453,35 @@ cmd_delete() {
     echo "Deleted: $name"
 }
 
+cmd_log() {
+    local folder="${1:-}"
+    [ -n "$folder" ] || die "usage: log FOLDER"
+    local f="$LOG_DIR/$(slug_of "$folder").log"
+    if [ -f "$f" ]; then
+        tail -n 500 "$f"
+    fi
+}
+
+cmd_clear_log() {
+    local folder="${1:-}"
+    [ -n "$folder" ] || die "usage: clear-log FOLDER"
+    local f="$LOG_DIR/$(slug_of "$folder").log"
+    : > "$f" 2>/dev/null || true
+    echo "Log cleared."
+}
+
 case "${1:-}" in
     backup)         shift; cmd_backup "${1:-}" ;;
     backup-due)     cmd_backup_due ;;
     apply-schedule) cmd_apply_schedule ;;
     list)           cmd_list ;;
-    estimate)    shift; cmd_estimate "$@" ;;
-    restore)     shift; cmd_restore "$@" ;;
-    delete)      shift; cmd_delete "$@" ;;
+    estimate)       shift; cmd_estimate "$@" ;;
+    restore)        shift; cmd_restore "$@" ;;
+    delete)         shift; cmd_delete "$@" ;;
+    log)            shift; cmd_log "$@" ;;
+    clear-log)      shift; cmd_clear_log "$@" ;;
     *)
-        echo "Usage: $0 {backup [FOLDER]|backup-due|apply-schedule|list|estimate FOLDER [PATTERN...]|restore ARCHIVE [TARGET]|delete ARCHIVE}" >&2
+        echo "Usage: $0 {backup [FOLDER]|backup-due|apply-schedule|list|estimate FOLDER [PATTERN...]|restore ARCHIVE [TARGET]|delete ARCHIVE|log FOLDER|clear-log FOLDER}" >&2
         exit 2
         ;;
 esac

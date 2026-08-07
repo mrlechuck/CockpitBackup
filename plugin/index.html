@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=0.5.1">
+    <link rel="stylesheet" href="style.css?v=0.6.0">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -53,6 +53,7 @@
                         Configured backups
                         <span id="config-count" class="badge badge-count" hidden></span>
                         <span id="config-total" class="config-total"></span>
+                        <span id="disk-free" class="disk-free" hidden></span>
                     </h2>
                     <button id="add-config" class="btn btn-primary btn-small">
                         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 2a.75.75 0 0 1 .75.75v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5A.75.75 0 0 1 8 2Z"/></svg>
@@ -148,6 +149,24 @@
                         </tfoot>
                     </table>
                 </div>
+            </section>
+
+            <!-- Backup log -->
+            <section class="card" id="detail-log-card">
+                <div class="card-header">
+                    <h2 class="card-title">
+                        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 2.75A1.75 1.75 0 0 1 3.75 1h8.5A1.75 1.75 0 0 1 14 2.75v10.5A1.75 1.75 0 0 1 12.25 15h-8.5A1.75 1.75 0 0 1 2 13.25V2.75Zm2.5 1.75a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7Zm0 3a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7Zm0 3a.75.75 0 0 0 0 1.5h4a.75.75 0 0 0 0-1.5h-4Z"/></svg>
+                        Backup log
+                    </h2>
+                    <div class="log-actions">
+                        <button id="log-refresh" class="btn btn-plain" title="Reload the log">
+                            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M13.65 2.35a.75.75 0 0 0-1.28.53v1.4A6 6 0 1 0 14 8a.75.75 0 0 0-1.5 0 4.5 4.5 0 1 1-1.32-3.18l-1.55 1.55a.75.75 0 0 0 .53 1.28h3.09a.75.75 0 0 0 .75-.75V3.81a.75.75 0 0 0-.22-.53l-.13-.93Z"/></svg>
+                            Refresh
+                        </button>
+                        <button id="log-clear" class="btn btn-small">Clear log</button>
+                    </div>
+                </div>
+                <pre id="log-body" class="console-body log-body muted">Loading…</pre>
             </section>
         </div>
     </div>
@@ -284,6 +303,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=0.5.1"></script>
+    <script src="app.js?v=0.6.0"></script>
 </body>
 </html>

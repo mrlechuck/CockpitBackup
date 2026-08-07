@@ -16,6 +16,13 @@ folder**, each with its own schedule, right from the web interface:
 - **Exclusions**: skip subfolders or file patterns (e.g. `cache`, `*.log`) per backup
 - **Optional title** per backup and a **size calculator** in the add/edit dialog that
   shows the current folder size with exclusions applied
+- **Per-folder backup log** in the detail view (start/finish, size, duration,
+  trigger), with a clear-log button; logs live in `/var/log/cockpit-backup/`
+- **Live progress**: while a backup runs, its row shows an animated indicator and a
+  toast announces automatic runs — the state comes from the server, so it survives
+  page reloads and disappears only when the backup actually ends
+- **Catch-up marker**: archives created by recovering a missed schedule carry an
+  info icon with an explanatory tooltip
 
 ## Requirements
 
@@ -112,6 +119,8 @@ sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh list
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh estimate /var/www cache '*.log'
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh restore backup-var-www-20260807-020000.tar.gz
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh restore backup-var-www-20260807-020000.tar.gz /tmp/test-restore
+sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh log /var/www
+sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh clear-log /var/www
 ```
 
 ## Uninstall
