@@ -458,7 +458,6 @@ function configRow(b, idx) {
     if (isRunning(b.folder)) {
         const spin = document.createElement("span");
         spin.className = "row-spinner";
-        spin.dataset.tooltip = "Backup in progress…";
         actions.appendChild(spin);
     }
     actions.appendChild(stats);
