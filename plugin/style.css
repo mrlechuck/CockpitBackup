@@ -986,25 +986,46 @@ select { cursor: pointer; }
 .time-chip-remove:hover { color: var(--danger); }
 #config-new-time { max-width: 140px; }
 
-/* Tiered retention rows */
-.retention-panel { margin-top: 0.6rem; }
-.tier-row {
+/* Retention mode picker */
+.ret-modes {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin: 0.4rem 0;
-    font-size: 13.5px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin: 0.2rem 0 0.3rem;
 }
-.tier-row input[type="number"] { width: 70px; }
+.ret-mode {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: 13.5px;
+    cursor: pointer;
+}
+.ret-mode input { accent-color: var(--primary); }
+
+/* Tiered retention: aligned grid — checkbox | keep | unit | for | span | unit */
+.retention-panel { margin-top: 0.6rem; }
+.tier-grid {
+    display: grid;
+    grid-template-columns: auto 64px auto auto 64px auto;
+    gap: 0.5rem 0.6rem;
+    align-items: center;
+    font-size: 13.5px;
+    width: fit-content;
+}
+.tier-grid input[type="number"] { width: 64px; text-align: right; }
 .tier-check {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    min-width: 64px;
     font-weight: 600;
 }
 .tier-check input { accent-color: var(--primary); }
+.tier-for { color: var(--text-muted); justify-self: center; }
+.tier-hint {
+    color: var(--text-muted);
+    margin: 0.5rem 0 0.4rem;
+}
+.tier-cell-off { opacity: 0.4; }
 @keyframes modal-in {
     from { opacity: 0; transform: translateY(8px) scale(0.98); }
     to { opacity: 1; transform: none; }

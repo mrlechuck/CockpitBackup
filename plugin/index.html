@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=1.3.0">
+    <link rel="stylesheet" href="style.css?v=1.3.1">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -291,14 +291,16 @@
                 </div>
 
                 <h3 class="modal-section-title">Retention</h3>
-                <label class="radio">
-                    <input type="radio" name="retention-mode" value="simple" id="ret-simple" checked>
-                    Simple — keep everything for a number of days
-                </label>
-                <label class="radio">
-                    <input type="radio" name="retention-mode" value="tiered" id="ret-tiered">
-                    Tiered — thin out older backups (grandfather-father-son)
-                </label>
+                <div class="ret-modes">
+                    <label class="ret-mode">
+                        <input type="radio" name="retention-mode" value="simple" id="ret-simple" checked>
+                        <span><strong>Simple</strong> — keep everything for N days</span>
+                    </label>
+                    <label class="ret-mode">
+                        <input type="radio" name="retention-mode" value="tiered" id="ret-tiered">
+                        <span><strong>Tiered</strong> — thin out old backups over time</span>
+                    </label>
+                </div>
                 <div id="retention-simple" class="retention-panel">
                     <div class="field">
                         <label class="field-label" for="config-retention">Keep backups for (days)</label>
@@ -306,30 +308,39 @@
                     </div>
                 </div>
                 <div id="retention-tiered" class="retention-panel" hidden>
-                    <div class="tier-row">
-                        <label class="tier-check"><input type="checkbox" id="tier-d-on" checked> Keep</label>
+                    <div class="tier-grid">
+                        <label class="tier-check"><input type="checkbox" id="tier-d-on" checked> keep</label>
                         <input type="number" id="tier-d-keep" min="1" max="24" value="2">
-                        <span>per day for</span>
+                        <span class="tier-unit">per day</span>
+                        <span class="tier-for">for</span>
                         <input type="number" id="tier-d-span" min="1" max="90" value="7">
-                        <span>days</span>
-                    </div>
-                    <div class="tier-row">
+                        <span class="tier-unit">days</span>
+
                         <label class="tier-check"><input type="checkbox" id="tier-w-on" checked> then</label>
                         <input type="number" id="tier-w-keep" min="1" max="7" value="1">
-                        <span>per week for</span>
+                        <span class="tier-unit">per week</span>
+                        <span class="tier-for">for</span>
                         <input type="number" id="tier-w-span" min="1" max="52" value="4">
-                        <span>weeks</span>
-                    </div>
-                    <div class="tier-row">
+                        <span class="tier-unit">weeks</span>
+
                         <label class="tier-check"><input type="checkbox" id="tier-m-on" checked> then</label>
                         <input type="number" id="tier-m-keep" min="1" max="10" value="1">
-                        <span>per month for</span>
+                        <span class="tier-unit">per month</span>
+                        <span class="tier-for">for</span>
                         <input type="number" id="tier-m-span" min="1" max="120" value="12">
-                        <span>months</span>
+                        <span class="tier-unit">months</span>
+
+                        <label class="tier-check"><input type="checkbox" id="tier-y-on"> then</label>
+                        <input type="number" id="tier-y-keep" min="1" max="12" value="1">
+                        <span class="tier-unit">per year</span>
+                        <span class="tier-for">for</span>
+                        <input type="number" id="tier-y-span" min="1" max="100" value="5">
+                        <span class="tier-unit">years</span>
                     </div>
-                    <p class="field-hint muted">Older backups are thinned to the newest ones of each
-                        day, week and month; anything beyond the last tier is deleted. Incremental
-                        chains are kept or dropped as a whole.</p>
+                    <p id="tier-d-hint" class="field-hint tier-hint" hidden></p>
+                    <p class="field-hint muted">Keeps the newest backup of each period and deletes the
+                        rest; anything past the last tier is removed. Incremental chains are kept or
+                        dropped as a whole.</p>
                 </div>
 
                 <h3 class="modal-section-title">Exclusions</h3>
@@ -439,6 +450,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=1.3.0"></script>
+    <script src="app.js?v=1.3.1"></script>
 </body>
 </html>

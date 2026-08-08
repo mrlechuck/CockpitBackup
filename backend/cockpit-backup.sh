@@ -512,12 +512,15 @@ def gfs_keep(units, pol):
     d = pol.get("daily") or {}
     w = pol.get("weekly") or {}
     m = pol.get("monthly") or {}
+    y = pol.get("yearly") or {}
     d_keep, d_days = int(d.get("keep", 0)), int(d.get("days", 0))
     w_keep, w_weeks = int(w.get("keep", 0)), int(w.get("weeks", 0))
     m_keep, m_months = int(m.get("keep", 0)), int(m.get("months", 0))
+    y_keep, y_years = int(y.get("keep", 0)), int(y.get("years", 0))
     b1 = d_days * 86400
     b2 = b1 + w_weeks * 7 * 86400
     b3 = b2 + m_months * 30 * 86400
+    b4 = b3 + y_years * 365 * 86400
     counts = {}
     kept = set()
     for newest_ts, key in sorted(units, reverse=True):   # newest first
@@ -530,6 +533,8 @@ def gfs_keep(units, pol):
             bucket, cap = ("w", iso[0], iso[1]), w_keep
         elif age <= b3 and m_keep:
             bucket, cap = ("m", t.year, t.month), m_keep
+        elif age <= b4 and y_keep:
+            bucket, cap = ("y", t.year), y_keep
         else:
             continue
         if counts.get(bucket, 0) < cap:
