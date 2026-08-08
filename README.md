@@ -27,6 +27,10 @@ folder**, each with its own schedule, right from the web interface:
   S3-compatible service via custom endpoint). Remote backups are built in a temp
   folder, uploaded and removed locally; the archive list shows a Local/S3 badge and
   restore downloads them transparently
+- **Incremental backups**: per-folder choice between a full archive every time and
+  an incremental chain — a periodic full plus daily archives containing **only what
+  changed** since the previous backup. Restore transparently recombines the whole
+  chain, deletions included
 
 ## Requirements
 
@@ -93,6 +97,41 @@ If you remove a configuration, its archives are **not** deleted: they remain vis
 in the "Other archives" section and can still be restored. Retention cleanup uses each
 folder's configured days (global default for orphaned archives).
 
+### Incremental backups
+
+Set a backup's **Backup mode** to "Incremental" in its add/edit dialog. From then on
+the folder is backed up as a **chain**:
+
+- a **full** archive (`…-full.tar.gz`) starts the chain, and a new one is created
+  every *N* days ("New full backup every", default 7);
+- between fulls, each run produces an **incremental** archive (`…-incr.tar.gz`)
+  containing only the files that are new or changed since the previous backup —
+  detected via GNU tar's `--listed-incremental` snapshots, kept in
+  `<destination>/.snar/`. Deleted files are recorded too;
+- the archive list shows a **Full/Incr badge** on each archive of an incremental
+  folder.
+
+**Restore stays one click**: pick any archive and the backend automatically extracts
+the chain's full plus every incremental up to that point, in order, propagating
+deletions — the target ends up exactly as the folder was at that backup's time.
+(A manual `tar -xzf` of each member with `--listed-incremental=/dev/null`, from the
+full onwards, does the same.)
+
+Safety rules, all automatic:
+
+- retention expires a chain **only as a whole**, once its newest member is older
+  than the configured days — the full is never pruned out from under its
+  incrementals (so with "full every" larger than retention, fulls are kept longer);
+- deleting an archive other backups depend on is refused; deleting the chain's tip
+  resets the chain;
+- the next run falls back to a **full** whenever the chain cannot be trusted:
+  first run, missing/corrupted snapshot, a deleted chain member, changed
+  exclusions, or the folder being re-pointed;
+- a failed or interrupted run never corrupts the chain — tar works on a copy of
+  the snapshot, promoted only after the archive is safely stored;
+- works with **S3 storage** too: snapshots stay local, chain restore downloads
+  every needed member.
+
 ### S3 remote storage
 
 Enable it in the **Remote storage (S3)** card: bucket, region, credentials, and
@@ -127,10 +166,14 @@ Then set a backup's **Storage** to "Amazon S3" in its add/edit dialog. How it wo
         { "folder": "/etc", "time": "02:00", "retention_days": 30, "enabled": true,
           "title": "System configuration", "s3": true },
         { "folder": "/var/www", "time": "03:30", "retention_days": 14, "enabled": false,
-          "excludes": ["cache", "logs/tmp", "*.log"], "title": "Web sites" }
+          "excludes": ["cache", "logs/tmp", "*.log"], "title": "Web sites",
+          "mode": "incremental", "full_every": 7 }
     ]
 }
 ```
+
+`mode` is `"full"` (default when absent) or `"incremental"`; `full_every` is the
+number of days between full backups of an incremental chain (default 7).
 
 The legacy format with `"folders": [...]` is migrated automatically on first save.
 
