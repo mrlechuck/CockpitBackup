@@ -466,6 +466,10 @@ cfg = json.load(open(sys.argv[1]))
 dest, default_ret = sys.argv[2], int(sys.argv[3])
 retentions = {b["folder"]: int(b.get("retention_days", default_ret))
               for b in cfg.get("backups", [])}
+# Tiered (GFS) retention policies, e.g. keep 2/day for 7 days, then 1/week for
+# 4 weeks, then 1/month for 12 months. Folders without one keep the flat rule.
+policies = {b["folder"]: b["retention"] for b in cfg.get("backups", [])
+            if isinstance(b.get("retention"), dict)}
 now = time.time()
 
 def read_meta(path):
@@ -491,22 +495,71 @@ for mp in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
     entries[name] = {"folder": meta.get("folder"), "mtime": meta.get("mtime", now),
                      "remote": True, "chain": meta.get("chain")}
 
-# Retention works per chain: a chain (full + its incrementals) expires only as
-# a whole, once its NEWEST member has outlived the folder's retention — a full
-# must never be pruned out from under incrementals that still need it. Archives
-# without a chain (classic full mode, legacy) are chains of one, so for them
-# this is exactly the old per-archive rule. Remote members are printed as
+# Retention works per chain: a chain (full + its incrementals) is one unit and
+# expires only as a whole, dated by its NEWEST member — a full must never be
+# pruned out from under incrementals that still need it. Archives without a
+# chain (classic full mode, legacy) are units of one.
+#
+# Flat rule (retention_days): the unit expires once older than N days.
+# Tiered rule (retention policy): grandfather-father-son selection — keep the
+# newest K units per calendar day within the daily window, then K per ISO week,
+# then K per calendar month; everything else goes. The newest unit of a folder
+# is always kept as a safety net. Remote members are printed as
 # "RemoteExpired:" for the shell to delete on S3.
+import datetime as _dt
+
+def gfs_keep(units, pol):
+    d = pol.get("daily") or {}
+    w = pol.get("weekly") or {}
+    m = pol.get("monthly") or {}
+    d_keep, d_days = int(d.get("keep", 0)), int(d.get("days", 0))
+    w_keep, w_weeks = int(w.get("keep", 0)), int(w.get("weeks", 0))
+    m_keep, m_months = int(m.get("keep", 0)), int(m.get("months", 0))
+    b1 = d_days * 86400
+    b2 = b1 + w_weeks * 7 * 86400
+    b3 = b2 + m_months * 30 * 86400
+    counts = {}
+    kept = set()
+    for newest_ts, key in sorted(units, reverse=True):   # newest first
+        age = now - newest_ts
+        t = _dt.datetime.fromtimestamp(newest_ts)
+        if age <= b1 and d_keep:
+            bucket, cap = ("d", t.date().isoformat()), d_keep
+        elif age <= b2 and w_keep:
+            iso = t.isocalendar()
+            bucket, cap = ("w", iso[0], iso[1]), w_keep
+        elif age <= b3 and m_keep:
+            bucket, cap = ("m", t.year, t.month), m_keep
+        else:
+            continue
+        if counts.get(bucket, 0) < cap:
+            counts[bucket] = counts.get(bucket, 0) + 1
+            kept.add(key)
+    return kept
+
 groups = {}
 for name, e in entries.items():
     groups.setdefault(e["chain"] or name, []).append(name)
-for members in groups.values():
+
+units_by_folder = {}
+for key, members in groups.items():
     folder = next((entries[n]["folder"] for n in members if entries[n]["folder"]), None)
-    ret = retentions.get(folder, default_ret)
     newest = max(entries[n]["mtime"] for n in members)
-    if now - newest <= ret * 86400:
-        continue
-    for n in members:
+    units_by_folder.setdefault(folder, []).append((newest, key))
+
+expired_keys = set()
+for folder, units in units_by_folder.items():
+    pol = policies.get(folder)
+    if pol:
+        kept = gfs_keep(units, pol)
+    else:
+        ret = retentions.get(folder, default_ret)
+        kept = {key for newest, key in units if now - newest <= ret * 86400}
+    kept.add(max(units)[1])   # never drop a folder's most recent backup
+    expired_keys.update(key for _, key in units if key not in kept)
+
+for key in expired_keys:
+    for n in groups[key]:
         if entries[n]["remote"]:
             print("RemoteExpired:", n)
         else:
@@ -644,17 +697,28 @@ for meta_path in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
     if m > newest.get(folder, 0):
         newest[folder] = m
 
+def entry_times(b):
+    ts = b.get("times") or [b.get("time") or default_time]
+    parsed = []
+    for t in ts:
+        try:
+            hh, mm = map(int, str(t).split(":"))
+            parsed.append((hh, mm))
+        except (ValueError, AttributeError):
+            pass
+    return parsed or [(2, 0)]
+
 for b in cfg.get("backups", []):
     if not b.get("enabled", True):
         continue
-    t = b.get("time") or default_time
-    try:
-        hh, mm = map(int, t.split(":"))
-    except ValueError:
-        hh, mm = 2, 0
-    sched = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    if now < sched:
-        sched -= datetime.timedelta(days=1)   # last scheduled occurrence
+    # Last passed occurrence across ALL of the entry's daily times
+    scheds = []
+    for hh, mm in entry_times(b):
+        s = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if now < s:
+            s -= datetime.timedelta(days=1)
+        scheds.append(s)
+    sched = max(scheds)
     if newest.get(b["folder"], 0) < sched.timestamp():
         trigger = "scheduled" if (now - sched).total_seconds() <= 180 else "catchup"
         print(trigger + "\t" + b["folder"])
@@ -696,12 +760,12 @@ times = set()
 for b in cfg.get("backups", []):
     if not b.get("enabled", True):
         continue
-    t = b.get("time") or default
-    try:
-        hh, mm = t.split(":")
-        times.add("%02d:%02d" % (int(hh), int(mm)))
-    except ValueError:
-        pass
+    for t in (b.get("times") or [b.get("time") or default]):
+        try:
+            hh, mm = str(t).split(":")
+            times.add("%02d:%02d" % (int(hh), int(mm)))
+        except (ValueError, AttributeError):
+            pass
 if not times:
     # keep the timer valid even with nothing enabled; backup-due just no-ops
     times.add("03:00")

@@ -18,7 +18,9 @@ if (typeof cockpit === "undefined") {
                   endpoint: "", access_key: "AKIAEXAMPLE", secret_key: "supersecret" },
             backups: [
                 { folder: "/etc", time: "02:00", retention_days: 30, enabled: true, title: "System configuration", s3: true },
-                { folder: "/home/roberto/documents", time: "01:30", retention_days: 14, enabled: true },
+                { folder: "/home/roberto/documents", times: ["01:30", "13:30"], enabled: true,
+                  retention: { daily: { keep: 2, days: 7 }, weekly: { keep: 1, weeks: 4 },
+                               monthly: { keep: 1, months: 12 } } },
                 { folder: "/var/www", time: "03:00", retention_days: 30, enabled: false, excludes: ["cache", "*.log"], title: "Web sites", mode: "incremental", full_every: 7 }
             ]
         };
@@ -143,7 +145,24 @@ const DEFAULT_CONFIG = {
 };
 const DEFAULT_TIME = "02:00";
 
-function entryTime(b) { return b.time || config.time || DEFAULT_TIME; }
+function entryTimesList(b) {
+    const ts = (b.times && b.times.length) ? b.times : [b.time || config.time || DEFAULT_TIME];
+    return ts.slice().sort();
+}
+function entryTime(b) { return entryTimesList(b)[0]; }
+
+/* Human summary of an entry's retention: flat days or tiered GFS policy */
+function retentionLabel(b) {
+    const pol = b.retention;
+    if (pol && typeof pol === "object") {
+        const parts = [];
+        if (pol.daily) parts.push(pol.daily.keep + "/day for " + pol.daily.days + "d");
+        if (pol.weekly) parts.push(pol.weekly.keep + "/week for " + pol.weekly.weeks + "w");
+        if (pol.monthly) parts.push(pol.monthly.keep + "/month for " + pol.monthly.months + "m");
+        return "tiered: " + parts.join(", ");
+    }
+    return "keeps " + (b.retention_days || config.retention_days) + " days";
+}
 
 let config = { ...DEFAULT_CONFIG };
 let archives = [];
@@ -202,7 +221,7 @@ function levelBadge(item) {
     if (item.level !== 0 && item.level !== 1) return null;
     const badge = document.createElement("span");
     badge.className = "level-badge " + (item.level === 1 ? "level-incr" : "level-full");
-    badge.textContent = item.level === 1 ? "Incr" : "Full";
+    badge.textContent = item.level === 1 ? "Incremental" : "Full";
     badge.dataset.tooltip = item.level === 1
         ? "Only the changes since the previous backup. Restore combines the whole chain automatically."
         : "Full archive: starts a new incremental chain";
@@ -435,14 +454,22 @@ function configRow(b, idx) {
     path.appendChild(storageBadge(!!b.s3, b.s3
         ? "Backups are uploaded to the S3 bucket"
         : "Backups are stored on the local disk"));
+    if (b.mode === "incremental") {
+        const mb = document.createElement("span");
+        mb.className = "mode-badge";
+        mb.textContent = "Incremental";
+        mb.dataset.tooltip = "Incremental backups: a full archive every " +
+            (b.full_every || 7) + " days, only the changes in between";
+        path.appendChild(mb);
+    }
 
     const meta = document.createElement("span");
     meta.className = "config-meta muted";
     const parts = [];
-    parts.push(b.enabled === false ? "automatic backup off" : "daily at " + entryTime(b));
-    parts.push("keeps " + (b.retention_days || config.retention_days) + " days");
-    if (b.mode === "incremental")
-        parts.push("incremental (full every " + (b.full_every || 7) + " d)");
+    parts.push(b.enabled === false
+        ? "automatic backup off"
+        : "daily at " + entryTimesList(b).join(" + "));
+    parts.push(retentionLabel(b));
     if (b.excludes && b.excludes.length)
         parts.push(b.excludes.length === 1 ? "1 exclusion" : b.excludes.length + " exclusions");
     meta.textContent = parts.join(" · ");
@@ -595,18 +622,6 @@ function renderDetailView(folder) {
 
     const items = archivesFor(folder);
     const total = items.reduce((s, a) => s + a.size, 0);
-    const parts = [];
-    if (entry) parts.push(entry.enabled === false ? "automatic backup off" : "daily at " + entryTime(entry));
-    parts.push(items.length === 1 ? "1 archive" : items.length + " archives");
-    if (items.length) parts.push(formatSize(total) + " total");
-    if (entry) parts.push("keeps " + (entry.retention_days || config.retention_days) + " days");
-    if (entry) parts.push(entry.s3 ? "S3 remote storage" : "local disk storage");
-    if (entry && entry.mode === "incremental")
-        parts.push("incremental (full every " + (entry.full_every || 7) + " d)");
-    if (entry && entry.excludes && entry.excludes.length)
-        parts.push("excludes: " + entry.excludes.join(", "));
-    if (isOther) parts.push("from folders no longer configured");
-    $("detail-sub").textContent = parts.join(" · ");
 
     const countBadge = $("archive-count");
     countBadge.hidden = items.length === 0;
@@ -691,15 +706,81 @@ function applySchedule() {
         .catch(err => toast("Failed to update the schedule: " + errText(err), "danger"));
 }
 
+/* Schedule editor state: the times of the entry being edited */
+let modalTimes = [];
+
+function renderTimesList() {
+    const list = $("times-list");
+    list.innerHTML = "";
+    modalTimes.slice().sort().forEach(t => {
+        const chip = document.createElement("span");
+        chip.className = "time-chip";
+        const label = document.createElement("span");
+        label.textContent = t;
+        const rm = document.createElement("button");
+        rm.className = "time-chip-remove";
+        rm.textContent = "✕";
+        rm.setAttribute("aria-label", "Remove " + t);
+        rm.addEventListener("click", () => {
+            modalTimes = modalTimes.filter(x => x !== t);
+            renderTimesList();
+        });
+        chip.appendChild(label);
+        chip.appendChild(rm);
+        list.appendChild(chip);
+    });
+    if (!modalTimes.length) {
+        const empty = document.createElement("span");
+        empty.className = "muted small";
+        empty.textContent = "No times yet — add at least one.";
+        list.appendChild(empty);
+    }
+}
+
+function addModalTime() {
+    const t = $("config-new-time").value;
+    if (!t) return;
+    if (!modalTimes.includes(t))
+        modalTimes.push(t);
+    renderTimesList();
+}
+
+function setTier(t, tier, defKeep, defSpan, spanKey) {
+    $("tier-" + t + "-on").checked = !!tier;
+    $("tier-" + t + "-keep").value = (tier && tier.keep) || defKeep;
+    $("tier-" + t + "-span").value = (tier && tier[spanKey]) || defSpan;
+}
+
+function updateRetentionPanels() {
+    const tiered = $("ret-tiered").checked;
+    $("retention-simple").hidden = tiered;
+    $("retention-tiered").hidden = !tiered;
+}
+
 function openConfigDialog(idx) {
     editingIndex = idx;
     $("config-title").textContent = idx === -1 ? "Add backup" : "Edit backup";
     $("config-name").value = idx === -1 ? "" : (config.backups[idx].title || "");
     $("config-folder").value = idx === -1 ? "" : config.backups[idx].folder;
-    $("config-time").value = idx === -1 ? DEFAULT_TIME : entryTime(config.backups[idx]);
+
+    // Schedule: one or more daily times
+    modalTimes = idx === -1 ? [DEFAULT_TIME] : entryTimesList(config.backups[idx]).slice();
+    renderTimesList();
+    $("config-new-time").value = DEFAULT_TIME;
+
+    // Retention: simple day-count or tiered (GFS) policy
+    const pol = idx !== -1 ? config.backups[idx].retention : null;
+    const hasPol = !!(pol && typeof pol === "object");
+    $("ret-tiered").checked = hasPol;
+    $("ret-simple").checked = !hasPol;
     $("config-retention").value = idx === -1
         ? config.retention_days
         : (config.backups[idx].retention_days || config.retention_days);
+    setTier("d", hasPol ? pol.daily : { keep: 2, days: 7 }, 2, 7, "days");
+    setTier("w", hasPol ? pol.weekly : { keep: 1, weeks: 4 }, 1, 4, "weeks");
+    setTier("m", hasPol ? pol.monthly : { keep: 1, months: 12 }, 1, 12, "months");
+    updateRetentionPanels();
+
     $("config-excludes").value = idx === -1
         ? ""
         : (config.backups[idx].excludes || []).join("\n");
@@ -732,10 +813,13 @@ function showConfigError(msg) {
     el.hidden = !msg;
 }
 
+function tierNum(id, def, max) {
+    return Math.min(max, Math.max(1, parseInt($(id).value, 10) || def));
+}
+
 function saveConfigEntry() {
     const title = $("config-name").value.trim();
     const folder = $("config-folder").value.trim().replace(/\/+$/, "") || $("config-folder").value.trim();
-    const time = $("config-time").value || DEFAULT_TIME;
     const retention = Math.max(1, parseInt($("config-retention").value, 10) || config.retention_days);
     const excludes = $("config-excludes").value
         .split("\n")
@@ -755,29 +839,55 @@ function saveConfigEntry() {
         showConfigError("This folder is already configured");
         return;
     }
+    if (!modalTimes.length) {
+        showConfigError("Add at least one backup time");
+        return;
+    }
+    const times = modalTimes.slice().sort();
+
+    const tiered = $("ret-tiered").checked;
+    let policy = null;
+    if (tiered) {
+        policy = {};
+        if ($("tier-d-on").checked)
+            policy.daily = { keep: tierNum("tier-d-keep", 2, 24), days: tierNum("tier-d-span", 7, 90) };
+        if ($("tier-w-on").checked)
+            policy.weekly = { keep: tierNum("tier-w-keep", 1, 7), weeks: tierNum("tier-w-span", 4, 52) };
+        if ($("tier-m-on").checked)
+            policy.monthly = { keep: tierNum("tier-m-keep", 1, 10), months: tierNum("tier-m-span", 12, 120) };
+        if (!Object.keys(policy).length) {
+            showConfigError("Enable at least one retention tier");
+            return;
+        }
+    }
 
     const useS3 = $("config-storage").value === "s3";
     const incremental = $("config-mode").value === "incremental";
     const fullEvery = Math.max(1, parseInt($("config-full-every").value, 10) || 7);
-    if (editingIndex === -1) {
-        const entry = { folder, time, retention_days: retention };
-        if (title) entry.title = title;
-        if (excludes.length) entry.excludes = excludes;
-        if (useS3) entry.s3 = true;
-        if (incremental) { entry.mode = "incremental"; entry.full_every = fullEvery; }
-        config.backups.push(entry);
+
+    const entry = editingIndex === -1 ? { folder } : { ...config.backups[editingIndex], folder };
+    entry.times = times;
+    delete entry.time;                 // superseded by times[]
+    if (tiered) {
+        entry.retention = policy;
+        delete entry.retention_days;
     } else {
-        const entry = { ...config.backups[editingIndex], folder, time, retention_days: retention };
-        if (title) entry.title = title;
-        else delete entry.title;
-        if (excludes.length) entry.excludes = excludes;
-        else delete entry.excludes;
-        if (useS3) entry.s3 = true;
-        else delete entry.s3;
-        if (incremental) { entry.mode = "incremental"; entry.full_every = fullEvery; }
-        else { delete entry.mode; delete entry.full_every; }
-        config.backups[editingIndex] = entry;
+        entry.retention_days = retention;
+        delete entry.retention;
     }
+    if (title) entry.title = title;
+    else delete entry.title;
+    if (excludes.length) entry.excludes = excludes;
+    else delete entry.excludes;
+    if (useS3) entry.s3 = true;
+    else delete entry.s3;
+    if (incremental) { entry.mode = "incremental"; entry.full_every = fullEvery; }
+    else { delete entry.mode; delete entry.full_every; }
+
+    if (editingIndex === -1)
+        config.backups.push(entry);
+    else
+        config.backups[editingIndex] = entry;
 
     const btn = $("config-save");
     setLoading(btn, true);
@@ -1196,6 +1306,10 @@ document.addEventListener("DOMContentLoaded", () => {
     $("config-folder").addEventListener("input", () => showConfigError(null));
     $("config-delete-confirm").addEventListener("click", confirmConfigDelete);
     $("config-mode").addEventListener("change", updateModeField);
+    $("config-add-time").addEventListener("click", addModalTime);
+    $("config-new-time").addEventListener("keydown", ev => { if (ev.key === "Enter") addModalTime(); });
+    $("ret-simple").addEventListener("change", updateRetentionPanels);
+    $("ret-tiered").addEventListener("change", updateRetentionPanels);
     $("estimate-size").addEventListener("click", estimateSize);
     $("save-settings").addEventListener("click", saveSettings);
     $("save-s3").addEventListener("click", () => saveS3());

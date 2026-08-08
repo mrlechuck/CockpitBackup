@@ -11,7 +11,10 @@
         "secret_key": ""
     },
     "backups": [
-        { "folder": "/etc", "time": "02:00", "retention_days": 30,
+        { "folder": "/etc", "times": ["02:00", "14:00"],
+          "retention": { "daily": { "keep": 2, "days": 7 },
+                         "weekly": { "keep": 1, "weeks": 4 },
+                         "monthly": { "keep": 1, "months": 12 } },
           "title": "System configuration" },
         { "folder": "/var/www", "time": "03:30", "retention_days": 14,
           "excludes": ["cache", "logs/tmp", "*.log"], "title": "Web sites",

@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=1.2.2">
+    <link rel="stylesheet" href="style.css?v=1.3.0">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -149,7 +149,6 @@
                 <div class="detail-heading">
                     <h1 id="detail-title" class="mono-title"></h1>
                     <p id="detail-path" class="detail-path" hidden></p>
-                    <p id="detail-sub" class="subtitle"></p>
                 </div>
             </header>
 
@@ -236,12 +235,13 @@
 
     <!-- Add / edit configuration modal -->
     <div id="config-dialog" class="modal-backdrop" hidden>
-        <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="config-title">
+        <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="config-title">
             <div class="modal-header">
                 <h2 id="config-title">Add backup</h2>
                 <button class="modal-close" data-close="config-dialog" title="Close">✕</button>
             </div>
             <div class="modal-body">
+                <h3 class="modal-section-title">General</h3>
                 <div class="field">
                     <label class="field-label" for="config-name">Title <span class="muted">(optional)</span></label>
                     <input type="text" id="config-name" placeholder="e.g. Web sites" autocomplete="off">
@@ -253,30 +253,21 @@
                 </div>
                 <div class="field-grid-2">
                     <div class="field">
-                        <label class="field-label" for="config-time">Daily backup time</label>
-                        <input type="time" id="config-time" value="02:00">
-                        <p class="field-hint muted">24-hour format, server's timezone.</p>
+                        <label class="field-label" for="config-storage">Storage</label>
+                        <select id="config-storage">
+                            <option value="local">Local disk</option>
+                            <option value="s3">Amazon S3 (remote)</option>
+                        </select>
+                        <p id="config-storage-hint" class="field-hint muted" hidden>
+                            Enable and configure S3 in “Remote storage” to use remote backups.</p>
                     </div>
                     <div class="field">
-                        <label class="field-label" for="config-retention">Keep backups for (days)</label>
-                        <input type="number" id="config-retention" min="1" max="3650" value="30">
+                        <label class="field-label" for="config-mode">Backup mode</label>
+                        <select id="config-mode">
+                            <option value="full">Full archive every time</option>
+                            <option value="incremental">Incremental (periodic full + changes)</option>
+                        </select>
                     </div>
-                </div>
-                <div class="field">
-                    <label class="field-label" for="config-storage">Storage</label>
-                    <select id="config-storage">
-                        <option value="local">Local disk</option>
-                        <option value="s3">Amazon S3 (remote)</option>
-                    </select>
-                    <p id="config-storage-hint" class="field-hint muted" hidden>
-                        Enable and configure S3 in “Remote storage” to use remote backups.</p>
-                </div>
-                <div class="field">
-                    <label class="field-label" for="config-mode">Backup mode</label>
-                    <select id="config-mode">
-                        <option value="full">Full archive every time</option>
-                        <option value="incremental">Incremental (periodic full + changes)</option>
-                    </select>
                 </div>
                 <div class="field" id="config-full-every-field" hidden>
                     <label class="field-label" for="config-full-every">New full backup every (days)</label>
@@ -284,6 +275,64 @@
                     <p class="field-hint muted">Between fulls, each backup stores only what changed
                         since the previous one. Restore automatically combines the whole chain.</p>
                 </div>
+
+                <h3 class="modal-section-title">Schedule</h3>
+                <div class="field">
+                    <label class="field-label">Backup times</label>
+                    <div id="times-list" class="times-list"></div>
+                    <div class="input-row">
+                        <input type="time" id="config-new-time" value="02:00">
+                        <button id="config-add-time" class="btn">
+                            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 2a.75.75 0 0 1 .75.75v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5A.75.75 0 0 1 8 2Z"/></svg>
+                            Add time
+                        </button>
+                    </div>
+                    <p class="field-hint muted">One or more runs per day — 24-hour format, server's timezone.</p>
+                </div>
+
+                <h3 class="modal-section-title">Retention</h3>
+                <label class="radio">
+                    <input type="radio" name="retention-mode" value="simple" id="ret-simple" checked>
+                    Simple — keep everything for a number of days
+                </label>
+                <label class="radio">
+                    <input type="radio" name="retention-mode" value="tiered" id="ret-tiered">
+                    Tiered — thin out older backups (grandfather-father-son)
+                </label>
+                <div id="retention-simple" class="retention-panel">
+                    <div class="field">
+                        <label class="field-label" for="config-retention">Keep backups for (days)</label>
+                        <input type="number" id="config-retention" min="1" max="3650" value="30">
+                    </div>
+                </div>
+                <div id="retention-tiered" class="retention-panel" hidden>
+                    <div class="tier-row">
+                        <label class="tier-check"><input type="checkbox" id="tier-d-on" checked> Keep</label>
+                        <input type="number" id="tier-d-keep" min="1" max="24" value="2">
+                        <span>per day for</span>
+                        <input type="number" id="tier-d-span" min="1" max="90" value="7">
+                        <span>days</span>
+                    </div>
+                    <div class="tier-row">
+                        <label class="tier-check"><input type="checkbox" id="tier-w-on" checked> then</label>
+                        <input type="number" id="tier-w-keep" min="1" max="7" value="1">
+                        <span>per week for</span>
+                        <input type="number" id="tier-w-span" min="1" max="52" value="4">
+                        <span>weeks</span>
+                    </div>
+                    <div class="tier-row">
+                        <label class="tier-check"><input type="checkbox" id="tier-m-on" checked> then</label>
+                        <input type="number" id="tier-m-keep" min="1" max="10" value="1">
+                        <span>per month for</span>
+                        <input type="number" id="tier-m-span" min="1" max="120" value="12">
+                        <span>months</span>
+                    </div>
+                    <p class="field-hint muted">Older backups are thinned to the newest ones of each
+                        day, week and month; anything beyond the last tier is deleted. Incremental
+                        chains are kept or dropped as a whole.</p>
+                </div>
+
+                <h3 class="modal-section-title">Exclusions</h3>
                 <div class="field">
                     <label class="field-label" for="config-excludes">Exclude from backup <span class="muted">(optional)</span></label>
                     <textarea id="config-excludes" rows="3" spellcheck="false"
@@ -390,6 +439,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=1.2.2"></script>
+    <script src="app.js?v=1.3.0"></script>
 </body>
 </html>

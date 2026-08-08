@@ -69,6 +69,26 @@ access" button at the top).
 | systemd units | `cockpit-backup.service` + `cockpit-backup.timer` |
 | Archives | `backup-<folder>-YYYYMMDD-HHMMSS.tar.gz` + `.meta` sidecar |
 
+### Multiple runs per day and tiered (GFS) retention
+
+Each backup can have **several daily times** (e.g. 02:00 and 14:00) and, instead of
+the flat "keep N days", a **tiered grandfather-father-son policy**:
+
+```json
+"times": ["02:00", "14:00"],
+"retention": {
+    "daily":   { "keep": 2, "days": 7 },
+    "weekly":  { "keep": 1, "weeks": 4 },
+    "monthly": { "keep": 1, "months": 12 }
+}
+```
+
+Reading: keep up to 2 backups per day for the last 7 days, then 1 per ISO week for
+4 more weeks, then 1 per calendar month for 12 more months; anything older is
+deleted. The newest of each period wins, incremental chains are kept or dropped as
+a whole, and a folder's most recent backup is never deleted. Entries with
+`retention_days` keep the old flat behavior.
+
 ### Per-folder scheduling
 
 The systemd timer fires **exactly at the configured times**: `apply-schedule`
