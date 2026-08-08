@@ -644,22 +644,28 @@ function archiveRow(item) {
 
     const tdName = document.createElement("td");
     tdName.className = "archive-name";
-    tdName.textContent = item.name;
 
-    tdName.appendChild(storageBadge(!!item.remote, item.remote
+    const nameText = document.createElement("div");
+    nameText.className = "archive-name-text";
+    nameText.textContent = item.name;
+    tdName.appendChild(nameText);
+
+    // Badges live on their own line below the name
+    const badges = document.createElement("div");
+    badges.className = "archive-badges";
+    badges.appendChild(storageBadge(!!item.remote, item.remote
         ? "Stored on the S3 bucket (restore downloads it automatically)"
         : "Stored on the local destination disk"));
-
     const lvl = levelBadge(item);
-    if (lvl) tdName.appendChild(lvl);
-
+    if (lvl) badges.appendChild(lvl);
     if (item.trigger === "catchup") {
         const info = document.createElement("span");
         info.className = "catchup-info";
         info.dataset.tooltip = "Catch-up backup: the scheduled time was missed, so it ran later";
         info.innerHTML = ICONS.info;
-        tdName.appendChild(info);
+        badges.appendChild(info);
     }
+    tdName.appendChild(badges);
 
     const tdDate = document.createElement("td");
     tdDate.textContent = new Date(item.mtime * 1000).toLocaleString("en-US",

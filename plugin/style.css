@@ -796,10 +796,21 @@ select { cursor: pointer; }
 }
 .backup-table tbody tr { transition: background 0.08s; }
 .backup-table tbody tr:hover { background: var(--hover-row); }
-.backup-table .archive-name {
+.backup-table .archive-name .archive-name-text {
     font-family: "RedHatMono", ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 13px;
 }
+/* Badges on their own line under the archive name */
+.archive-badges {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.3rem;
+}
+.archive-badges .storage-badge,
+.archive-badges .level-badge,
+.archive-badges .catchup-info { margin-left: 0; }
 .col-right { text-align: right; }
 .backup-table td.col-right { font-variant-numeric: tabular-nums; }
 .cell-actions {
