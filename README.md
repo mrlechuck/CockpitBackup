@@ -1,3 +1,5 @@
+<p align="center"><img src="plugin/icon.svg" width="90" alt="Cockpit Backup icon"></p>
+
 # Cockpit Backup — folder backup plugin
 
 A [Cockpit](https://cockpit-project.org/) plugin to manage **a separate backup for each
