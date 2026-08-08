@@ -377,6 +377,28 @@ select { cursor: pointer; }
     color: var(--primary);
 }
 
+.level-badge {
+    display: inline-block;
+    white-space: nowrap;
+    margin-left: 0.5rem;
+    padding: 0.05rem 0.5rem;
+    border-radius: 999px;
+    font-family: "RedHatText", "Open Sans", sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    vertical-align: 1px;
+}
+.level-full {
+    background: color-mix(in srgb, var(--success, #3e8635) 18%, transparent);
+    color: var(--success, #3e8635);
+}
+.level-incr {
+    background: var(--chip-bg);
+    color: var(--text-muted);
+}
+
 .field-hint {
     font-size: 12px;
     margin: 0.3rem 0 0;

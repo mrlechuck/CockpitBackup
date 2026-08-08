@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=1.1.0">
+    <link rel="stylesheet" href="style.css?v=1.2.0">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -266,6 +266,19 @@
                         Enable and configure S3 in “Remote storage” to use remote backups.</p>
                 </div>
                 <div class="field">
+                    <label class="field-label" for="config-mode">Backup mode</label>
+                    <select id="config-mode">
+                        <option value="full">Full archive every time</option>
+                        <option value="incremental">Incremental (periodic full + changes)</option>
+                    </select>
+                </div>
+                <div class="field" id="config-full-every-field" hidden>
+                    <label class="field-label" for="config-full-every">New full backup every (days)</label>
+                    <input type="number" id="config-full-every" min="1" max="365" value="7">
+                    <p class="field-hint muted">Between fulls, each backup stores only what changed
+                        since the previous one. Restore automatically combines the whole chain.</p>
+                </div>
+                <div class="field">
                     <label class="field-label" for="config-excludes">Exclude from backup <span class="muted">(optional)</span></label>
                     <textarea id="config-excludes" rows="3" spellcheck="false"
                               placeholder="cache&#10;logs/tmp&#10;*.log"></textarea>
@@ -312,6 +325,7 @@
             </div>
             <div class="modal-body">
                 <p class="archive-chip" id="restore-archive-name"></p>
+                <p id="restore-chain-note" class="muted small" hidden></p>
 
                 <label class="choice" for="mode-original">
                     <input type="radio" name="restore-mode" value="original" id="mode-original" checked>
@@ -357,6 +371,7 @@
             <div class="modal-body">
                 <p>Permanently delete this archive?</p>
                 <p class="archive-chip" id="delete-archive-name"></p>
+                <p id="delete-chain-warning" class="alert alert-warning" hidden></p>
                 <p class="muted small">This action cannot be undone.</p>
             </div>
             <div class="modal-footer">
@@ -369,6 +384,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=1.1.0"></script>
+    <script src="app.js?v=1.2.0"></script>
 </body>
 </html>

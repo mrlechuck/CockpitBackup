@@ -14,6 +14,7 @@
         { "folder": "/etc", "time": "02:00", "retention_days": 30,
           "title": "System configuration" },
         { "folder": "/var/www", "time": "03:30", "retention_days": 14,
-          "excludes": ["cache", "logs/tmp", "*.log"], "title": "Web sites" }
+          "excludes": ["cache", "logs/tmp", "*.log"], "title": "Web sites",
+          "mode": "incremental", "full_every": 7 }
     ]
 }

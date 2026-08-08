@@ -19,7 +19,7 @@ if (typeof cockpit === "undefined") {
             backups: [
                 { folder: "/etc", time: "02:00", retention_days: 30, enabled: true, title: "System configuration", s3: true },
                 { folder: "/home/roberto/documents", time: "01:30", retention_days: 14, enabled: true },
-                { folder: "/var/www", time: "03:00", retention_days: 30, enabled: false, excludes: ["cache", "*.log"], title: "Web sites" }
+                { folder: "/var/www", time: "03:00", retention_days: 30, enabled: false, excludes: ["cache", "*.log"], title: "Web sites", mode: "incremental", full_every: 7 }
             ]
         };
         const now = Math.floor(Date.now() / 1000);
@@ -29,7 +29,9 @@ if (typeof cockpit === "undefined") {
             { name: "backup-home-roberto-documents-20260807-020000.tar.gz", size: 734003200, mtime: now - 3600 * 7, folder: "/home/roberto/documents", trigger: "scheduled" },
             { name: "backup-home-roberto-documents-20260806-020000.tar.gz", size: 731906048, mtime: now - 3600 * 31, folder: "/home/roberto/documents", trigger: "manual" },
             { name: "backup-home-roberto-documents-20260805-020000.tar.gz", size: 729808896, mtime: now - 3600 * 55, folder: "/home/roberto/documents", trigger: "catchup" },
-            { name: "backup-var-www-20260807-020000.tar.gz", size: 220043200, mtime: now - 3600 * 7, folder: "/var/www", trigger: "scheduled" },
+            { name: "backup-var-www-20260807-030000-incr.tar.gz", size: 12043200, mtime: now - 3600 * 7, folder: "/var/www", trigger: "scheduled", level: 1, base: "backup-var-www-20260806-030000-incr.tar.gz", chain: "backup-var-www-20260805-030000-full.tar.gz" },
+            { name: "backup-var-www-20260806-030000-incr.tar.gz", size: 8250000, mtime: now - 3600 * 31, folder: "/var/www", trigger: "scheduled", level: 1, base: "backup-var-www-20260805-030000-full.tar.gz", chain: "backup-var-www-20260805-030000-full.tar.gz" },
+            { name: "backup-var-www-20260805-030000-full.tar.gz", size: 220043200, mtime: now - 3600 * 55, folder: "/var/www", trigger: "scheduled", level: 0, chain: "backup-var-www-20260805-030000-full.tar.gz" },
             { name: "backup-20260801-020000.tar.gz", size: 903100000, mtime: now - 3600 * 150, folder: null }
         ];
         const mockRunning = [];
@@ -191,6 +193,19 @@ function storageBadge(isRemote, tooltip) {
     badge.className = "storage-badge " + (isRemote ? "storage-s3" : "storage-local");
     badge.textContent = isRemote ? "S3" : "Local";
     badge.dataset.tooltip = tooltip;
+    return badge;
+}
+
+/* Full/Incr chip for archives of incremental-mode folders; classic archives
+ * carry no level in their meta and get no chip. */
+function levelBadge(item) {
+    if (item.level !== 0 && item.level !== 1) return null;
+    const badge = document.createElement("span");
+    badge.className = "level-badge " + (item.level === 1 ? "level-incr" : "level-full");
+    badge.textContent = item.level === 1 ? "Incr" : "Full";
+    badge.dataset.tooltip = item.level === 1
+        ? "Only the changes since the previous backup. Restore combines the whole chain automatically."
+        : "Full archive: starts a new incremental chain";
     return badge;
 }
 
@@ -426,6 +441,8 @@ function configRow(b, idx) {
     const parts = [];
     parts.push(b.enabled === false ? "automatic backup off" : "daily at " + entryTime(b));
     parts.push("keeps " + (b.retention_days || config.retention_days) + " days");
+    if (b.mode === "incremental")
+        parts.push("incremental (full every " + (b.full_every || 7) + " d)");
     if (b.excludes && b.excludes.length)
         parts.push(b.excludes.length === 1 ? "1 exclusion" : b.excludes.length + " exclusions");
     meta.textContent = parts.join(" · ");
@@ -584,6 +601,8 @@ function renderDetailView(folder) {
     if (items.length) parts.push(formatSize(total) + " total");
     if (entry) parts.push("keeps " + (entry.retention_days || config.retention_days) + " days");
     if (entry) parts.push(entry.s3 ? "S3 remote storage" : "local disk storage");
+    if (entry && entry.mode === "incremental")
+        parts.push("incremental (full every " + (entry.full_every || 7) + " d)");
     if (entry && entry.excludes && entry.excludes.length)
         parts.push("excludes: " + entry.excludes.join(", "));
     if (isOther) parts.push("from folders no longer configured");
@@ -614,6 +633,9 @@ function archiveRow(item) {
     tdName.appendChild(storageBadge(!!item.remote, item.remote
         ? "Stored on the S3 bucket (restore downloads it automatically)"
         : "Stored on the local destination disk"));
+
+    const lvl = levelBadge(item);
+    if (lvl) tdName.appendChild(lvl);
 
     if (item.trigger === "catchup") {
         const info = document.createElement("span");
@@ -690,10 +712,18 @@ function openConfigDialog(idx) {
     s3Option.disabled = !s3Ready() && !entryUsesS3;
     storage.value = entryUsesS3 ? "s3" : "local";
     $("config-storage-hint").hidden = s3Ready();
+    const entryIncremental = idx !== -1 && config.backups[idx].mode === "incremental";
+    $("config-mode").value = entryIncremental ? "incremental" : "full";
+    $("config-full-every").value = idx === -1 ? 7 : (config.backups[idx].full_every || 7);
+    updateModeField();
     $("estimate-result").textContent = "";
     showConfigError(null);
     openModal("config-dialog");
     $("config-folder").focus();
+}
+
+function updateModeField() {
+    $("config-full-every-field").hidden = $("config-mode").value !== "incremental";
 }
 
 function showConfigError(msg) {
@@ -727,11 +757,14 @@ function saveConfigEntry() {
     }
 
     const useS3 = $("config-storage").value === "s3";
+    const incremental = $("config-mode").value === "incremental";
+    const fullEvery = Math.max(1, parseInt($("config-full-every").value, 10) || 7);
     if (editingIndex === -1) {
         const entry = { folder, time, retention_days: retention };
         if (title) entry.title = title;
         if (excludes.length) entry.excludes = excludes;
         if (useS3) entry.s3 = true;
+        if (incremental) { entry.mode = "incremental"; entry.full_every = fullEvery; }
         config.backups.push(entry);
     } else {
         const entry = { ...config.backups[editingIndex], folder, time, retention_days: retention };
@@ -741,6 +774,8 @@ function saveConfigEntry() {
         else delete entry.excludes;
         if (useS3) entry.s3 = true;
         else delete entry.s3;
+        if (incremental) { entry.mode = "incremental"; entry.full_every = fullEvery; }
+        else { delete entry.mode; delete entry.full_every; }
         config.backups[editingIndex] = entry;
     }
 
@@ -751,6 +786,8 @@ function saveConfigEntry() {
         .then(() => {
             closeModal("config-dialog");
             toast(editingIndex === -1 ? "Backup added" : "Backup updated", "success");
+            if (incremental && fullEvery > retention)
+                toast("Note: each full backup is kept beyond retention while its incrementals still need it", "info");
             renderListView();
         })
         .catch(err => toast("Failed to save: " + errText(err), "danger"))
@@ -1041,6 +1078,19 @@ function downloadArchive(item) {
 function openDeleteDialog(name) {
     deleteArchiveName = name;
     $("delete-archive-name").textContent = name;
+    // The backend refuses to delete an archive other backups build on; warn
+    // upfront so the refusal doesn't come as a surprise
+    const deps = archives.filter(a =>
+        a.name !== name && (a.base === name || a.chain === name)).length;
+    const warn = $("delete-chain-warning");
+    if (deps > 0) {
+        warn.textContent = deps + " incremental backup" + (deps === 1 ? "" : "s") +
+            " of this chain depend" + (deps === 1 ? "s" : "") +
+            " on this archive: delete those first (newest first).";
+        warn.hidden = false;
+    } else {
+        warn.hidden = true;
+    }
     openModal("delete-dialog");
 }
 
@@ -1062,6 +1112,17 @@ function doDelete() {
 function openRestoreDialog(item) {
     restoreArchive = item.name;
     $("restore-archive-name").textContent = item.name;
+
+    const chainNote = $("restore-chain-note");
+    if (item.level === 1) {
+        chainNote.textContent = "Incremental archive: the full backup" +
+            (item.chain ? " " + item.chain : "") +
+            " and every incremental up to this point are restored in order, " +
+            "including deletions made along the chain.";
+        chainNote.hidden = false;
+    } else {
+        chainNote.hidden = true;
+    }
 
     const pathsEl = $("restore-paths");
     pathsEl.innerHTML = "";
@@ -1134,6 +1195,7 @@ document.addEventListener("DOMContentLoaded", () => {
     $("config-folder").addEventListener("keydown", ev => { if (ev.key === "Enter") saveConfigEntry(); });
     $("config-folder").addEventListener("input", () => showConfigError(null));
     $("config-delete-confirm").addEventListener("click", confirmConfigDelete);
+    $("config-mode").addEventListener("change", updateModeField);
     $("estimate-size").addEventListener("click", estimateSize);
     $("save-settings").addEventListener("click", saveSettings);
     $("save-s3").addEventListener("click", () => saveS3());
