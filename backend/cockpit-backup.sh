@@ -675,7 +675,7 @@ PYEOF
         up_start=$(date +%s)
         P_STEP="$P_STEPS"   # upload is always the last phase
         progress_set "$slug" upload 0 "" ""
-        if s3_run s3 cp "$tmp" "s3://$bucket/$key" 2> >(upload_progress "$slug" "$up_start"); then
+        if s3_run s3 cp "$tmp" "s3://$bucket/$key" > >(upload_progress "$slug" "$up_start") 2>&1; then
             # Meta stub in the destination keeps the remote archive visible in the UI
             python3 - "$archive.meta" "$folder" "$trigger" "$size_b" "$meta_level" "$meta_chain" "$meta_base" "$den" <<'EOF'
 import json, sys, time
@@ -1337,7 +1337,7 @@ cmd_restore() {
             echo "Downloading from S3: $n …"
             restore_emit download "$idx" "$M" 0 "" ""
             s3_run s3 cp "s3://$(s3_cfg bucket)/$(s3_key "$n")" "$src" \
-                2> >(restore_dl_reader "$idx" "$M" "$(date +%s)") \
+                > >(restore_dl_reader "$idx" "$M" "$(date +%s)") 2>&1 \
                 || die "download from S3 failed: $n"
         else
             die "archive not found: $a"
