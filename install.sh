@@ -17,7 +17,7 @@ CONFIG_DIR=/etc/cockpit-backup
 
 echo "Installo il frontend in $PLUGIN_DIR …"
 mkdir -p "$PLUGIN_DIR"
-cp "$SRC"/plugin/manifest.json "$SRC"/plugin/index.html "$SRC"/plugin/app.js "$SRC"/plugin/style.css "$PLUGIN_DIR/"
+cp "$SRC"/plugin/manifest.json "$SRC"/plugin/index.html "$SRC"/plugin/app.js "$SRC"/plugin/style.css "$SRC"/plugin/app-icon.svg "$PLUGIN_DIR/"
 
 echo "Installo lo script di backup in $HELPER_DIR …"
 mkdir -p "$HELPER_DIR"
