@@ -736,7 +736,9 @@ function renderDetailView(folder) {
     const items = archivesFor(folder);
     const total = items.reduce((s, a) => s + a.size, 0);
     const s3Items = items.filter(a => a.remote);
+    const localItems = items.filter(a => !a.remote);
     const s3Total = s3Items.reduce((s, a) => s + a.size, 0);
+    const localTotal = localItems.reduce((s, a) => s + a.size, 0);
 
     const countBadge = $("archive-count");
     countBadge.hidden = items.length === 0;
@@ -746,7 +748,10 @@ function renderDetailView(folder) {
     $("list-table-wrap").hidden = items.length === 0;
     $("detail-total").textContent = formatSize(total);
     let totalLabel = "Total · " + (items.length === 1 ? "1 archive" : items.length + " archives");
-    if (s3Items.length > 0) totalLabel += " · " + formatSize(s3Total) + " on S3";
+    if (s3Items.length > 0 && localItems.length > 0)
+        totalLabel += " · " + formatSize(localTotal) + " local · " + formatSize(s3Total) + " on S3";
+    else if (s3Items.length > 0)
+        totalLabel += " · " + formatSize(s3Total) + " on S3";
     $("detail-total-label").textContent = totalLabel;
 
     const tbody = $("backup-rows");
