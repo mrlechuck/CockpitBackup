@@ -495,10 +495,15 @@ function renderListView() {
     countBadge.hidden = config.backups.length === 0;
     countBadge.textContent = config.backups.length;
 
-    // Overall disk usage of every LOCAL archive in the destination
+    // Overall space used by archives, split by storage (local disk vs S3)
     const localArchives = archives.filter(a => !a.remote);
+    const s3Archives = archives.filter(a => a.remote);
     const grandTotal = localArchives.reduce((s, a) => s + a.size, 0);
-    $("config-total").textContent = localArchives.length > 0 ? formatSize(grandTotal) + " local total" : "";
+    const s3Total = s3Archives.reduce((s, a) => s + a.size, 0);
+    const totalParts = [];
+    if (localArchives.length > 0) totalParts.push(formatSize(grandTotal) + " local");
+    if (s3Archives.length > 0) totalParts.push(formatSize(s3Total) + " on S3");
+    $("config-total").textContent = totalParts.join(" · ");
 
     // Free space on the destination disk, red when below 10 GB
     const diskEl = $("disk-free");
@@ -730,6 +735,8 @@ function renderDetailView(folder) {
 
     const items = archivesFor(folder);
     const total = items.reduce((s, a) => s + a.size, 0);
+    const s3Items = items.filter(a => a.remote);
+    const s3Total = s3Items.reduce((s, a) => s + a.size, 0);
 
     const countBadge = $("archive-count");
     countBadge.hidden = items.length === 0;
@@ -738,8 +745,9 @@ function renderDetailView(folder) {
     $("list-empty").hidden = items.length > 0;
     $("list-table-wrap").hidden = items.length === 0;
     $("detail-total").textContent = formatSize(total);
-    $("detail-total-label").textContent =
-        "Total · " + (items.length === 1 ? "1 archive" : items.length + " archives");
+    let totalLabel = "Total · " + (items.length === 1 ? "1 archive" : items.length + " archives");
+    if (s3Items.length > 0) totalLabel += " · " + formatSize(s3Total) + " on S3";
+    $("detail-total-label").textContent = totalLabel;
 
     const tbody = $("backup-rows");
     tbody.innerHTML = "";
