@@ -899,6 +899,19 @@ select { cursor: pointer; }
     font-variant-numeric: tabular-nums;
 }
 
+/* Restore dialog live-progress line (no spinner — the button has one) */
+.restore-progress {
+    margin-top: 0.9rem;
+    padding: 0.6rem 0.8rem;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
 /* Info icon on catch-up archives */
 .catchup-info {
     display: inline-flex;

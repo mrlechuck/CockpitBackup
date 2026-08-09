@@ -592,6 +592,17 @@ EOF
     if $incremental && [ -n "$filecount" ]; then
         echo "$filecount" > "$SNAR_DIR/$slug.count" 2>/dev/null || true
     fi
+    # Record the uncompressed size in the (running) meta so a later restore can
+    # show an extract percentage. Old archives simply won't have it.
+    python3 - "$workdir/$name.meta" "$den" <<'PYEOF' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    d["usize"] = int(sys.argv[2])
+    json.dump(d, open(sys.argv[1], "w"))
+except Exception:
+    pass
+PYEOF
 
     # ---- Archive (tar) with checkpoint-based progress --------------------
     P_STEP="$backup_step"
@@ -626,11 +637,12 @@ EOF
         progress_set "$slug" upload 0 "" ""
         if s3_run s3 cp "$tmp" "s3://$bucket/$key" 2> >(upload_progress "$slug" "$up_start"); then
             # Meta stub in the destination keeps the remote archive visible in the UI
-            python3 - "$archive.meta" "$folder" "$trigger" "$size_b" "$meta_level" "$meta_chain" "$meta_base" <<'EOF'
+            python3 - "$archive.meta" "$folder" "$trigger" "$size_b" "$meta_level" "$meta_chain" "$meta_base" "$den" <<'EOF'
 import json, sys, time
 meta = {"folder": sys.argv[2], "trigger": sys.argv[3],
         "remote": True, "s3": True,
-        "size": int(sys.argv[4]), "mtime": int(time.time())}
+        "size": int(sys.argv[4]), "mtime": int(time.time()),
+        "usize": int(sys.argv[8])}
 if sys.argv[5] != "":
     meta["level"] = int(sys.argv[5])
     meta["chain"] = sys.argv[6]
@@ -1175,6 +1187,87 @@ fetch_archive() {
     die "archive not found: $a"
 }
 
+# The restore streams progress to stdout as "@@P@@ {json}" lines that the UI
+# parses (phase, member N of M, pct, eta); everything else is console output.
+restore_emit() {   # phase member members pct eta detail
+    local pct="${4:-}" eta="${5:-}" detail="${6:-}"
+    [ -n "$pct" ] || pct=null
+    [ -n "$eta" ] || eta=null
+    if [ -n "$detail" ]; then detail="\"$detail\""; else detail=null; fi
+    printf '@@P@@ {"phase":"%s","member":%s,"members":%s,"pct":%s,"eta":%s,"detail":%s}\n' \
+        "$1" "$2" "$3" "$pct" "$eta" "$detail"
+}
+
+# Uncompressed size recorded in a backup meta (0 when absent, e.g. old archives)
+archive_meta_usize() {
+    python3 -c 'import json,sys
+try:
+    print(int(json.load(open(sys.argv[1])).get("usize",0)))
+except Exception:
+    print(0)' "$1"
+}
+
+# tar -x checkpoint reader: emits extract progress (RDEN=member usize, RMEMBER/
+# RMEMBERS, RSTART set by the caller). % only when the uncompressed size is known.
+extract_reader() {
+    local lastw=0 cline n bytes now pct el rate rem eta
+    while IFS= read -r cline; do
+        case "$cline" in
+            "CKPT "*)
+                n=${cline#CKPT }
+                now=$(date +%s)
+                [ "$now" -le "$lastw" ] && continue
+                lastw=$now
+                bytes=$(( n * 2000 * 10240 ))
+                if [ "${RDEN:-0}" -gt 0 ]; then
+                    pct=$(( bytes * 100 / RDEN ))
+                    [ "$pct" -gt 99 ] && pct=99; [ "$pct" -lt 0 ] && pct=0
+                    el=$(( now - RSTART )); [ "$el" -lt 1 ] && el=1
+                    rate=$(( bytes / el )); rem=$(( RDEN - bytes )); [ "$rem" -lt 0 ] && rem=0
+                    eta=0; [ "$rate" -gt 0 ] && eta=$(( rem / rate ))
+                    restore_emit extract "$RMEMBER" "$RMEMBERS" "$pct" "$eta" ""
+                else
+                    restore_emit extract "$RMEMBER" "$RMEMBERS" "" "" "$(( bytes / 1048576 )) MB"
+                fi
+                ;;
+            "Removing leading"*) : ;;
+            *) printf '%s\n' "$cline" >&2 ;;
+        esac
+    done
+}
+
+# aws download reader: emits download progress as @@P@@ lines. Lives in a temp
+# file so python's stdin stays the aws pipe.
+restore_dl_reader() {   # member members start
+    local rd="$RESTORE_TMPD/.dlreader.py"
+    if [ ! -f "$rd" ]; then
+        cat > "$rd" <<'PYEOF'
+import sys, re, json, time
+member, members, start = sys.argv[1], sys.argv[2], float(sys.argv[3])
+units = {"Bytes":1,"B":1,"KiB":1024,"MiB":1024**2,"GiB":1024**3,"TiB":1024**4,"KB":1000,"MB":1000**2,"GB":1000**3}
+pat = re.compile(r"Completed\s+([\d.]+)\s+(\w+)/~?\s*([\d.]+)\s+(\w+)")
+last = 0.0
+for line in sys.stdin:
+    m = pat.search(line)
+    if not m:
+        sys.stderr.write(line); continue
+    done = float(m.group(1)) * units.get(m.group(2), 1)
+    total = float(m.group(3)) * units.get(m.group(4), 1)
+    now = time.time()
+    if now - last < 1:
+        continue
+    last = now
+    pct = min(99, int(done * 100 / total)) if total > 0 else None
+    el = max(0.001, now - start); rate = done / el
+    eta = int(max(0, (total - done) / rate)) if rate > 0 else None
+    obj = {"phase": "download", "member": int(member), "members": int(members),
+           "pct": pct, "eta": eta, "detail": None}
+    sys.stdout.write("@@P@@ " + json.dumps(obj) + "\n"); sys.stdout.flush()
+PYEOF
+    fi
+    python3 "$rd" "$1" "$2" "$3"
+}
+
 cmd_restore() {
     local name="${1:-}" target="${2:-/}"
     [ -n "$name" ] || die "usage: restore ARCHIVE [TARGET]"
@@ -1201,27 +1294,45 @@ cmd_restore() {
     done
 
     RESTORE_TMPD=$(mktemp -d)
-    local n path
-    if [ "${#members[@]}" -eq 1 ]; then
-        # Plain archive: extract as before — files created after the backup
-        # are left untouched
-        path=$(fetch_archive "$name")
-        echo "Restoring $name to $target …"
-        tar -xzf "$path" -C "$target"
-    else
-        # Chain restore: --listed-incremental=/dev/null replays each member's
-        # dumpdirs, so deletions recorded along the chain propagate and the
-        # target ends up exactly as the folder was at the chosen archive
-        echo "Incremental archive: restoring its chain of ${#members[@]} backups …"
-        for n in "${members[@]}"; do
-            path=$(fetch_archive "$n")
-            echo "Restoring $n to $target …"
-            tar -xzf "$path" -C "$target" --listed-incremental=/dev/null
-            [ "$path" = "$DEST/$n" ] || rm -f "$path"
-        done
-    fi
+    local M=${#members[@]} idx=0 n a src usize
+    [ "$M" -gt 1 ] && echo "Incremental archive: restoring its chain of $M backups …"
+    for n in "${members[@]}"; do
+        idx=$((idx + 1))
+        a=$(archive_path "$n")
+        # Obtain the archive locally (download remote members with progress)
+        if [ -f "$a" ]; then
+            src="$a"
+        elif meta_is_remote "$a.meta"; then
+            s3_configured || die "archive is stored on S3 but S3 is not configured: $n"
+            command -v aws >/dev/null || die "aws CLI is not installed"
+            src="$RESTORE_TMPD/$n"
+            echo "Downloading from S3: $n …"
+            restore_emit download "$idx" "$M" 0 "" ""
+            s3_run s3 cp "s3://$(s3_cfg bucket)/$(s3_key "$n")" "$src" \
+                2> >(restore_dl_reader "$idx" "$M" "$(date +%s)") \
+                || die "download from S3 failed: $n"
+        else
+            die "archive not found: $a"
+        fi
+
+        # Extract, with checkpoint-based progress when the tar supports it and
+        # the uncompressed size is known
+        usize=$(archive_meta_usize "$a.meta")
+        echo "Restoring $n to $target …"
+        RDEN=${usize:-0}; RMEMBER=$idx; RMEMBERS=$M; RSTART=$(date +%s)
+        restore_emit extract "$idx" "$M" 0 "" ""
+        local -a xargs=(-xzf "$src" -C "$target")
+        [ "$M" -gt 1 ] && xargs+=(--listed-incremental=/dev/null)
+        if $TAR_CKPT; then
+            tar --checkpoint=2000 --checkpoint-action=echo='CKPT %u' "${xargs[@]}" 2> >(extract_reader)
+        else
+            tar "${xargs[@]}" 2> >(grep -v 'Removing leading' >&2 || true)
+        fi
+        [ "$src" = "$DEST/$n" ] || rm -f "$src"
+    done
     rm -rf "$RESTORE_TMPD"
     RESTORE_TMPD=""
+    restore_emit done "$M" "$M" 100 0 ""
     echo "Restore completed."
 }
 

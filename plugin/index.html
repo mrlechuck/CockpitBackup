@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=1.4.2">
+    <link rel="stylesheet" href="style.css?v=1.5.0">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -423,6 +423,8 @@
                     <strong>Warning:</strong> restoring to the original location overwrites existing files.
                 </div>
 
+                <div id="restore-progress" class="restore-progress" hidden></div>
+
                 <div id="restore-console" class="console" hidden>
                     <pre id="restore-output" class="console-body"></pre>
                 </div>
@@ -458,6 +460,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=1.4.2"></script>
+    <script src="app.js?v=1.5.0"></script>
 </body>
 </html>

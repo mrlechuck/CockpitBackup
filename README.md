@@ -24,8 +24,10 @@ folder**, each with its own schedule, right from the web interface:
   phase + "step N of M" + percentage + ETA (scan → backup → S3 upload as
   applicable). The state comes from the server, so it survives page reloads and
   disappears only when the backup actually ends
-- **Restore controls**: the restore dialog streams its output, ends with an OK
-  button, and its Cancel actually aborts an in-progress restore
+- **Restore controls**: the restore dialog shows a live phase line (S3 download →
+  extract, with "member N of M" for chains, percentage and ETA), streams its
+  output, ends with an OK button, and its Cancel actually aborts an in-progress
+  restore
 - **Catch-up marker**: archives created by recovering a missed schedule carry an
   info icon with an explanatory tooltip
 - **S3 remote storage**: per-folder choice between local disk and Amazon S3 (or any

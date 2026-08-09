@@ -141,8 +141,31 @@ if (typeof cockpit === "undefined") {
                 if (args[1] === "restore")
                     return promiseWith({
                         run: (res, rej, stream) => {
-                            stream("Restoring " + args[2] + " …\n");
-                            setTimeout(() => { stream("Restore completed.\n"); res(); }, 900);
+                            // Simulate: download from S3 (2 steps) then extract (2 steps)
+                            const emit = o => stream("@@P@@ " + JSON.stringify(o) + "\n");
+                            stream("Downloading from S3: " + args[2] + " …\n");
+                            let dl = 0;
+                            const t1 = setInterval(() => {
+                                dl += 34;
+                                if (dl >= 100) {
+                                    clearInterval(t1);
+                                    stream("Restoring " + args[2] + " to / …\n");
+                                    let ex = 0;
+                                    const t2 = setInterval(() => {
+                                        ex += 30;
+                                        if (ex >= 100) {
+                                            clearInterval(t2);
+                                            emit({ phase: "done", member: 1, members: 1, pct: 100, eta: 0 });
+                                            stream("Restore completed.\n");
+                                            res();
+                                            return;
+                                        }
+                                        emit({ phase: "extract", member: 1, members: 1, pct: Math.min(99, ex), eta: Math.round((100 - ex) / 30 * 0.8) });
+                                    }, 700);
+                                    return;
+                                }
+                                emit({ phase: "download", member: 1, members: 1, pct: Math.min(99, dl), eta: Math.round((100 - dl) / 34 * 0.7) });
+                            }, 700);
                         }
                     });
                 return promiseWith({ out: "" });
@@ -1366,6 +1389,8 @@ function openRestoreDialog(item) {
 
     $("restore-console").hidden = true;
     $("restore-output").textContent = "";
+    $("restore-progress").hidden = true;
+    $("restore-progress").textContent = "";
     $("restore-target").value = "";
     $("restore-target").disabled = true;
     $("mode-original").checked = true;
@@ -1407,11 +1432,25 @@ function doRestore() {
     out.textContent = "";
     setLoading(btn, true);
 
+    const prog = $("restore-progress");
+    prog.hidden = true;
+    prog.textContent = "";
+
     const proc = cockpit.spawn(args, { superuser: "require", err: "out" });
     restoreProc = proc;
+    let buf = "";
     proc.stream(data => {
-        out.textContent += data;
-        out.scrollTop = out.scrollHeight;
+        buf += data;
+        const lines = buf.split("\n");
+        buf = lines.pop();   // keep the last, possibly-incomplete line
+        lines.forEach(line => {
+            if (line.startsWith("@@P@@ ")) {
+                try { updateRestoreProgress(JSON.parse(line.slice(6))); } catch (e) { /* ignore */ }
+            } else if (line.length) {
+                out.textContent += line + "\n";
+                out.scrollTop = out.scrollHeight;
+            }
+        });
     });
     proc.then(() => {
         toast("Restore completed", "success");
@@ -1425,6 +1464,26 @@ function doRestore() {
         restoreFinished();
     });
     proc.finally(() => { setLoading(btn, false); restoreProc = null; });
+}
+
+/* Live restore progress line (parsed from @@P@@ stream lines). No spinner —
+ * the Restore button already shows one. */
+function updateRestoreProgress(p) {
+    const el = $("restore-progress");
+    if (p.phase === "done") { el.hidden = true; return; }
+    const labels = { download: "Downloading from S3", extract: "Extracting" };
+    let s = labels[p.phase] || "Working";
+    if (p.members > 1) s += " (member " + p.member + " of " + p.members + ")";
+    if (typeof p.pct === "number") {
+        s += " · " + p.pct + "%";
+        if (typeof p.eta === "number") s += " · ETA " + formatDuration(p.eta);
+    } else if (p.detail) {
+        s += " · " + p.detail;
+    } else {
+        s += "…";
+    }
+    el.textContent = s;
+    el.hidden = false;
 }
 
 /* On completion swap Restore/Cancel for a single OK that closes the dialog */
