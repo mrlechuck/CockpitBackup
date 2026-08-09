@@ -18,10 +18,8 @@
     --incr: #7c3aed;
     --baseline: #0e8ca8;
     --delta: #d6336c;
-    --full-bg: #cdd691;
-    --full-fg: #4c531f;
-    --local-bg: #e6dede;
-    --local-fg: #6f5859;
+    --full: #0d9488;
+    --local: #b45309;
     --success-hover: #2f6929;
     --warning: #dc9a00;
     --warning-hover: #b57f00;
@@ -54,6 +52,8 @@
         --incr: #a78bfa;
         --baseline: #38bdf8;
         --delta: #f472a3;
+        --full: #2dd4bf;
+        --local: #f59e0b;
         --success-hover: #6fbd5f;
         --warning: #f0ab00;
         --warning-hover: #ffc02b;
@@ -399,8 +399,8 @@ select { cursor: pointer; }
     vertical-align: 1px;
 }
 .storage-local {
-    background: var(--local-bg);
-    color: var(--local-fg);
+    background: color-mix(in srgb, var(--local) 20%, transparent);
+    color: var(--local);
 }
 .storage-s3 {
     background: color-mix(in srgb, var(--primary) 18%, transparent);
@@ -421,8 +421,8 @@ select { cursor: pointer; }
     vertical-align: 1px;
 }
 .level-full {
-    background: var(--full-bg);
-    color: var(--full-fg);
+    background: color-mix(in srgb, var(--full) 20%, transparent);
+    color: var(--full);
 }
 .level-baseline {
     background: color-mix(in srgb, var(--baseline) 20%, transparent);
