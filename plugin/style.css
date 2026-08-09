@@ -899,6 +899,10 @@ select { cursor: pointer; }
     font-variant-numeric: tabular-nums;
 }
 
+/* Same strip reused in the detail view, above the output console */
+#detail-progress:not(:empty) { margin-top: 0.9rem; }
+#detail-progress .config-progress { margin: 0; }
+
 /* Restore dialog live-progress line (no spinner — the button has one) */
 .restore-progress {
     margin-top: 0.9rem;

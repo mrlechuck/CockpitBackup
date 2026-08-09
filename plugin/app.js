@@ -696,6 +696,13 @@ function renderDetailView(folder) {
     // only in that folder's detail view, never leaking into another config's.
     $("backup-console").hidden = isOther || !entry || backupConsoleFolder !== folder;
 
+    // Live progress strip (phase · step · % · ETA) above the output, mirroring
+    // the one on the list, while a backup of this folder is running.
+    const detailProgress = $("detail-progress");
+    detailProgress.innerHTML = "";
+    const runInfo = isOther ? null : running.find(x => x.folder === folder);
+    if (runInfo) detailProgress.appendChild(progressRow(runInfo));
+
     // Always show the backed-up path prominently, even when a title is set
     const pathEl = $("detail-path");
     pathEl.hidden = isOther || !(entry && entry.title);
