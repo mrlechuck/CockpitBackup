@@ -1,6 +1,12 @@
-<p align="center"><img src="plugin/icon.svg" width="90" alt="Cockpit Backup icon"></p>
+<p align="center">
+  <img src="plugin/icon.svg" width="88" alt="Cockpit Backup">
+</p>
 
-# Cockpit Backup — folder backup plugin
+<h1 align="center">Cockpit Backup</h1>
+
+<p align="center">
+  Per-folder daily backups with restore, right inside <a href="https://cockpit-project.org/">Cockpit</a>.
+</p>
 
 A [Cockpit](https://cockpit-project.org/) plugin to manage **a separate backup for each
 folder**, each with its own schedule, right from the web interface:
