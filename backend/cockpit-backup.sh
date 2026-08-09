@@ -125,9 +125,8 @@ PROGRESS_DIR="$DEST/.progress"
 # (backup) or gzip and tar (restore). It counts the uncompressed stream, so it is
 # independent of the tar flavor/version. The parser lives in a temp file so
 # python's stdin stays the data pipe (a heredoc program would consume it).
-stream_counter_py() {   # stream_counter_py PATH — write the counter script if missing
+stream_counter_py() {   # stream_counter_py PATH — (re)write the counter script
     local rd="$1"
-    [ -f "$rd" ] && return 0
     mkdir -p "$(dirname "$rd")"
     cat > "$rd" <<'PYEOF'
 import sys, os, json, time
@@ -442,37 +441,53 @@ PYEOF
 upload_progress() {
     mkdir -p "$PROGRESS_DIR"
     local rd="$PROGRESS_DIR/.upreader.py"
-    if [ ! -f "$rd" ]; then
-        cat > "$rd" <<'PYEOF'
+    # Rewrite every run: this file persists in the destination between runs, so a
+    # guard would keep an older parser version around after an upgrade.
+    cat > "$rd" <<'PYEOF'
 import sys, re, json, time, os
 progf, start, step, steps, folder = sys.argv[1], float(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
 units = {"Bytes": 1, "B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4,
          "KB": 1000, "MB": 1000**2, "GB": 1000**3}
 pat = re.compile(r"Completed\s+([\d.]+)\s+(\w+)/~?\s*([\d.]+)\s+(\w+)")
 last = 0.0
-for line in sys.stdin:
-    m = pat.search(line)
-    if not m:
-        sys.stderr.write(line)
-        continue
-    done = float(m.group(1)) * units.get(m.group(2), 1)
-    total = float(m.group(3)) * units.get(m.group(4), 1)
-    now = time.time()
-    if now - last < 1:
-        continue
-    last = now
-    pct = min(99, int(done * 100 / total)) if total > 0 else None
-    el = max(0.001, now - start); rate = done / el
-    eta = int(max(0, (total - done) / rate)) if rate > 0 else None
+fd = sys.stdin.fileno()
+buf = b""
+# aws s3 cp refreshes the progress line with '\r' (no newline until the end), so
+# read raw bytes as they arrive and split on both '\r' and '\n' to see each update.
+while True:
     try:
-        tmp = progf + '.tmp'
-        json.dump({"folder": folder, "phase": "upload", "step": int(step), "steps": int(steps),
-                   "pct": pct, "eta": eta, "detail": None, "ts": int(now)}, open(tmp, 'w'))
-        os.replace(tmp, progf)
-    except Exception:
-        pass
+        chunk = os.read(fd, 65536)
+    except OSError:
+        break
+    if not chunk:
+        break
+    buf += chunk
+    parts = re.split(rb"[\r\n]", buf)
+    buf = parts.pop()
+    for raw in parts:
+        seg = raw.decode("utf-8", "replace")
+        m = pat.search(seg)
+        if not m:
+            if seg.strip():
+                sys.stderr.write(seg + "\n")
+            continue
+        done = float(m.group(1)) * units.get(m.group(2), 1)
+        total = float(m.group(3)) * units.get(m.group(4), 1)
+        now = time.time()
+        if now - last < 1:
+            continue
+        last = now
+        pct = min(99, int(done * 100 / total)) if total > 0 else None
+        el = max(0.001, now - start); rate = done / el
+        eta = int(max(0, (total - done) / rate)) if rate > 0 else None
+        try:
+            tmp = progf + '.tmp'
+            json.dump({"folder": folder, "phase": "upload", "step": int(step), "steps": int(steps),
+                       "pct": pct, "eta": eta, "detail": None, "ts": int(now)}, open(tmp, 'w'))
+            os.replace(tmp, progf)
+        except Exception:
+            pass
 PYEOF
-    fi
     python3 "$rd" "$PROGRESS_DIR/$1.json" "$2" "${P_STEP:-1}" "${P_STEPS:-1}" "$P_FOLDER"
 }
 
@@ -1238,27 +1253,43 @@ restore_dl_reader() {   # member members start
     local rd="$RESTORE_TMPD/.dlreader.py"
     if [ ! -f "$rd" ]; then
         cat > "$rd" <<'PYEOF'
-import sys, re, json, time
+import sys, re, json, time, os
 member, members, start = sys.argv[1], sys.argv[2], float(sys.argv[3])
 units = {"Bytes":1,"B":1,"KiB":1024,"MiB":1024**2,"GiB":1024**3,"TiB":1024**4,"KB":1000,"MB":1000**2,"GB":1000**3}
 pat = re.compile(r"Completed\s+([\d.]+)\s+(\w+)/~?\s*([\d.]+)\s+(\w+)")
 last = 0.0
-for line in sys.stdin:
-    m = pat.search(line)
-    if not m:
-        sys.stderr.write(line); continue
-    done = float(m.group(1)) * units.get(m.group(2), 1)
-    total = float(m.group(3)) * units.get(m.group(4), 1)
-    now = time.time()
-    if now - last < 1:
-        continue
-    last = now
-    pct = min(99, int(done * 100 / total)) if total > 0 else None
-    el = max(0.001, now - start); rate = done / el
-    eta = int(max(0, (total - done) / rate)) if rate > 0 else None
-    obj = {"phase": "download", "member": int(member), "members": int(members),
-           "pct": pct, "eta": eta, "detail": None}
-    sys.stdout.write("@@P@@ " + json.dumps(obj) + "\n"); sys.stdout.flush()
+fd = sys.stdin.fileno()
+buf = b""
+# aws refreshes the progress line with '\r'; read raw bytes and split on both.
+while True:
+    try:
+        chunk = os.read(fd, 65536)
+    except OSError:
+        break
+    if not chunk:
+        break
+    buf += chunk
+    parts = re.split(rb"[\r\n]", buf)
+    buf = parts.pop()
+    for raw in parts:
+        seg = raw.decode("utf-8", "replace")
+        m = pat.search(seg)
+        if not m:
+            if seg.strip():
+                sys.stderr.write(seg + "\n")
+            continue
+        done = float(m.group(1)) * units.get(m.group(2), 1)
+        total = float(m.group(3)) * units.get(m.group(4), 1)
+        now = time.time()
+        if now - last < 1:
+            continue
+        last = now
+        pct = min(99, int(done * 100 / total)) if total > 0 else None
+        el = max(0.001, now - start); rate = done / el
+        eta = int(max(0, (total - done) / rate)) if rate > 0 else None
+        obj = {"phase": "download", "member": int(member), "members": int(members),
+               "pct": pct, "eta": eta, "detail": None}
+        sys.stdout.write("@@P@@ " + json.dumps(obj) + "\n"); sys.stdout.flush()
 PYEOF
     fi
     python3 "$rd" "$1" "$2" "$3"
