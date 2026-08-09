@@ -123,6 +123,23 @@ PROGRESS_DIR="$DEST/.progress"
 # busybox) don't — fall back to indeterminate progress there.
 if tar --version 2>/dev/null | grep -qi 'GNU tar'; then TAR_CKPT=true; else TAR_CKPT=false; fi
 
+# Checkpoint granularity for tar progress. A checkpoint fires every N records of
+# 10240 bytes, so a fixed N makes the bar freeze on small archives (with N=2000
+# the first checkpoint only lands after ~20 MB — smaller backups never move).
+# Pick N from the known size so ~150 checkpoints span the whole run regardless of
+# size; fall back to a fine value when the size is unknown. REC (record size) is
+# 10240 = 20 * 512, GNU tar's default blocking factor.
+TAR_REC=10240
+ckpt_interval() {   # ckpt_interval BYTES → record count between checkpoints
+    local bytes="${1:-0}" n
+    case "$bytes" in ''|*[!0-9]*) bytes=0 ;; esac
+    if [ "$bytes" -le 0 ]; then echo 256; return; fi
+    n=$(( bytes / TAR_REC / 150 ))
+    [ "$n" -lt 16 ] && n=16
+    [ "$n" -gt 8192 ] && n=8192
+    echo "$n"
+}
+
 # ---------- Live progress ----------
 # Each running backup writes its current phase/percentage to
 # $PROGRESS_DIR/<slug>.json; `list` reads it so the UI shows spinner + phase +
@@ -425,20 +442,23 @@ archive_reader() {
     while IFS= read -r cline; do
         case "$cline" in
             "CKPT "*)
-                [ "${den:-0}" -gt 0 ] || continue
                 n=${cline#CKPT }
-                bytes=$(( n * CKN * REC ))
                 now=$(date +%s)
                 [ "$now" -le "$lastw" ] && continue
                 lastw=$now
-                pct=$(( bytes * 100 / den ))
-                [ "$pct" -gt 99 ] && pct=99
-                [ "$pct" -lt 0 ] && pct=0
-                el=$(( now - archive_start )); [ "$el" -lt 1 ] && el=1
-                rate=$(( bytes / el ))
-                rem=$(( den - bytes )); [ "$rem" -lt 0 ] && rem=0
-                eta=0; [ "$rate" -gt 0 ] && eta=$(( rem / rate ))
-                progress_set "$slug" archive "$pct" "$eta" ""
+                bytes=$(( n * CKN * REC ))
+                if [ "${den:-0}" -gt 0 ]; then
+                    pct=$(( bytes * 100 / den ))
+                    [ "$pct" -gt 99 ] && pct=99
+                    [ "$pct" -lt 0 ] && pct=0
+                    el=$(( now - archive_start )); [ "$el" -lt 1 ] && el=1
+                    rate=$(( bytes / el ))
+                    rem=$(( den - bytes )); [ "$rem" -lt 0 ] && rem=0
+                    eta=0; [ "$rate" -gt 0 ] && eta=$(( rem / rate ))
+                    progress_set "$slug" archive "$pct" "$eta" ""
+                else
+                    progress_set "$slug" archive "" "" "$(( bytes / 1048576 )) MB"
+                fi
                 ;;
             "Removing leading"*) : ;;
             *) printf '%s\n' "$cline" >&2 ;;
@@ -606,7 +626,8 @@ PYEOF
 
     # ---- Archive (tar) with checkpoint-based progress --------------------
     P_STEP="$backup_step"
-    local CKN=2000 REC=10240 archive_start
+    local REC="$TAR_REC" CKN archive_start
+    CKN=$(ckpt_interval "$den")
     archive_start=$(date +%s)
     if $TAR_CKPT; then
         progress_set "$slug" archive 0 "" ""
@@ -1207,8 +1228,9 @@ except Exception:
     print(0)' "$1"
 }
 
-# tar -x checkpoint reader: emits extract progress (RDEN=member usize, RMEMBER/
-# RMEMBERS, RSTART set by the caller). % only when the uncompressed size is known.
+# tar -x checkpoint reader: emits extract progress (RDEN=member usize, RCKN=its
+# checkpoint interval, RMEMBER/RMEMBERS, RSTART set by the caller). % only when
+# the uncompressed size is known.
 extract_reader() {
     local lastw=0 cline n bytes now pct el rate rem eta
     while IFS= read -r cline; do
@@ -1218,7 +1240,7 @@ extract_reader() {
                 now=$(date +%s)
                 [ "$now" -le "$lastw" ] && continue
                 lastw=$now
-                bytes=$(( n * 2000 * 10240 ))
+                bytes=$(( n * ${RCKN:-256} * TAR_REC ))
                 if [ "${RDEN:-0}" -gt 0 ]; then
                     pct=$(( bytes * 100 / RDEN ))
                     [ "$pct" -gt 99 ] && pct=99; [ "$pct" -lt 0 ] && pct=0
@@ -1320,11 +1342,12 @@ cmd_restore() {
         usize=$(archive_meta_usize "$a.meta")
         echo "Restoring $n to $target …"
         RDEN=${usize:-0}; RMEMBER=$idx; RMEMBERS=$M; RSTART=$(date +%s)
+        RCKN=$(ckpt_interval "$RDEN")
         restore_emit extract "$idx" "$M" 0 "" ""
         local -a xargs=(-xzf "$src" -C "$target")
         [ "$M" -gt 1 ] && xargs+=(--listed-incremental=/dev/null)
         if $TAR_CKPT; then
-            tar --checkpoint=2000 --checkpoint-action=echo='CKPT %u' "${xargs[@]}" 2> >(extract_reader)
+            tar --checkpoint="$RCKN" --checkpoint-action=echo='CKPT %u' "${xargs[@]}" 2> >(extract_reader)
         else
             tar "${xargs[@]}" 2> >(grep -v 'Removing leading' >&2 || true)
         fi
