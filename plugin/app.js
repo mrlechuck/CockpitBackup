@@ -1136,6 +1136,9 @@ function renderS3() {
     // Expand/collapse the card body via the chevron (independent of enabled).
     $("s3-body").hidden = s3Collapsed;
     $("s3-toggle").classList.toggle("expanded", !s3Collapsed);
+    // Drop the header's bottom margin when collapsed so the card padding stays
+    // symmetric (otherwise there's extra space below the header)
+    $("s3-body").previousElementSibling.classList.toggle("no-gap", s3Collapsed);
 }
 
 function gatherS3() {

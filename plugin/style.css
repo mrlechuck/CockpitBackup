@@ -721,6 +721,7 @@ select { cursor: pointer; }
     gap: 0.6rem;
     flex-shrink: 0;
 }
+.card-header.no-gap { margin-bottom: 0; }
 .s3-collapse-btn {
     border: none;
     background: none;
