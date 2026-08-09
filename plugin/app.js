@@ -260,16 +260,18 @@ function storageBadge(isRemote, tooltip) {
     return badge;
 }
 
-/* Full/Incr chip for archives of incremental-mode folders; classic archives
- * carry no level in their meta and get no chip. */
+/* Full/Incremental chip on every archive: "Incremental" for a chain member,
+ * "Full" otherwise (both an incremental chain's full and a standalone full). */
 function levelBadge(item) {
-    if (item.level !== 0 && item.level !== 1) return null;
+    const incr = item.level === 1;
     const badge = document.createElement("span");
-    badge.className = "level-badge " + (item.level === 1 ? "level-incr" : "level-full");
-    badge.textContent = item.level === 1 ? "Incremental" : "Full";
-    badge.dataset.tooltip = item.level === 1
+    badge.className = "level-badge " + (incr ? "level-incr" : "level-full");
+    badge.textContent = incr ? "Incremental" : "Full";
+    badge.dataset.tooltip = incr
         ? "Only the changes since the previous backup. Restore combines the whole chain automatically."
-        : "Full archive: starts a new incremental chain";
+        : (item.level === 0
+            ? "Full archive: starts a new incremental chain"
+            : "Full backup: a complete, self-contained archive");
     return badge;
 }
 
@@ -1264,15 +1266,29 @@ function runBackup(folder, btn, consoleWrap, consoleOut) {
             consoleOut.textContent += data;
             consoleOut.scrollTop = consoleOut.scrollHeight;
         });
+
+    // Poll fast while this manual backup runs so the live progress strip shows
+    // up immediately and stays smooth — even for quick backups the idle poll
+    // would otherwise start-and-finish between.
+    let polling = true;
+    const pollNow = () => {
+        if (!polling) return;
+        refreshArchives().then(() => { render(); if (polling) setTimeout(pollNow, 1000); });
+    };
+    setTimeout(pollNow, 300);
+
     proc.then(() => {
         toast("Backup completed", "success");
-        refreshArchives().then(render);
     });
     proc.catch(err => {
         if (consoleOut) consoleOut.textContent += "\nError: " + errText(err) + "\n";
         toast("Backup failed", "danger");
     });
-    proc.finally(() => setLoading(btn, false));
+    proc.finally(() => {
+        polling = false;
+        setLoading(btn, false);
+        refreshArchives().then(render);
+    });
 }
 
 /* ---------- Backup log ---------- */
@@ -1636,7 +1652,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // the server-side markers survive page reloads. Poll fast while a backup is
     // running (so the phase/percentage strip updates smoothly), slow otherwise.
     function poll() {
-        const delay = running.length ? 1500 : 8000;
+        const delay = running.length ? 1500 : 5000;
         setTimeout(() => {
             refreshArchives().then(() => { renderIfChanged(); poll(); });
         }, delay);
