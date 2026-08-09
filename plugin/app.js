@@ -260,18 +260,24 @@ function storageBadge(isRemote, tooltip) {
     return badge;
 }
 
-/* Full/Incremental chip on every archive: "Incremental" for a chain member,
- * "Full" otherwise (both an incremental chain's full and a standalone full). */
+/* Per-archive chip. Incremental chains: "Complete" (the full that opens the
+ * chain) and "Delta" (its incremental members). Standard configs: "Standard". */
 function levelBadge(item) {
-    const incr = item.level === 1;
+    let text, cls, tip;
+    if (item.level === 1) {
+        text = "Delta"; cls = "level-delta";
+        tip = "Delta: only the changes since the previous backup. Restore recombines the whole chain automatically.";
+    } else if (item.level === 0) {
+        text = "Baseline"; cls = "level-baseline";
+        tip = "Baseline: the full backup that opens an incremental chain; its Delta backups build on it.";
+    } else {
+        text = "Full"; cls = "level-full";
+        tip = "Full backup: a complete, self-contained archive (not part of an incremental chain).";
+    }
     const badge = document.createElement("span");
-    badge.className = "level-badge " + (incr ? "level-incr" : "level-full");
-    badge.textContent = incr ? "Incremental" : "Full";
-    badge.dataset.tooltip = incr
-        ? "Only the changes since the previous backup. Restore combines the whole chain automatically."
-        : (item.level === 0
-            ? "Full archive: starts a new incremental chain"
-            : "Full backup: a complete, self-contained archive");
+    badge.className = "level-badge " + cls;
+    badge.textContent = text;
+    badge.dataset.tooltip = tip;
     return badge;
 }
 
@@ -546,14 +552,18 @@ function configRow(b, idx) {
     path.appendChild(storageBadge(!!b.s3, b.s3
         ? "Backups are uploaded to the S3 bucket"
         : "Backups are stored on the local disk"));
+    const mb = document.createElement("span");
     if (b.mode === "incremental") {
-        const mb = document.createElement("span");
-        mb.className = "mode-badge";
+        mb.className = "mode-badge mode-incremental";
         mb.textContent = "Incremental";
-        mb.dataset.tooltip = "Incremental backups: a full archive every " +
-            (b.full_every || 7) + " days, only the changes in between";
-        path.appendChild(mb);
+        mb.dataset.tooltip = "Incremental backups: a Baseline archive every " +
+            (b.full_every || 7) + " days, only the Delta changes in between";
+    } else {
+        mb.className = "mode-badge mode-standard";
+        mb.textContent = "Standard";
+        mb.dataset.tooltip = "Standard backups: a full, self-contained archive every time";
     }
+    path.appendChild(mb);
 
     const meta = document.createElement("span");
     meta.className = "config-meta muted";
@@ -1364,7 +1374,7 @@ function openDeleteDialog(name) {
         a.name !== name && (a.base === name || a.chain === name)).length;
     const warn = $("delete-chain-warning");
     if (deps > 0) {
-        warn.textContent = deps + " incremental backup" + (deps === 1 ? "" : "s") +
+        warn.textContent = deps + " Delta backup" + (deps === 1 ? "" : "s") +
             " of this chain depend" + (deps === 1 ? "s" : "") +
             " on this archive: delete those first (newest first).";
         warn.hidden = false;
@@ -1395,9 +1405,9 @@ function openRestoreDialog(item) {
 
     const chainNote = $("restore-chain-note");
     if (item.level === 1) {
-        chainNote.textContent = "Incremental archive: the full backup" +
+        chainNote.textContent = "Delta archive: the Baseline backup" +
             (item.chain ? " " + item.chain : "") +
-            " and every incremental up to this point are restored in order, " +
+            " and every Delta up to this point are restored in order, " +
             "including deletions made along the chain.";
         chainNote.hidden = false;
     } else {

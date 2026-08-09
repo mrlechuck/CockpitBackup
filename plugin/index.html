@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=1.5.8">
+    <link rel="stylesheet" href="style.css?v=1.5.9">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -15,7 +15,7 @@
         <div id="view-list">
             <header class="page-header">
                 <div class="app-icon" aria-hidden="true">
-                    <img src="app-icon.svg?v=1.5.8" alt="" width="30" height="30">
+                    <img src="app-icon.svg?v=1.5.9" alt="" width="30" height="30">
                 </div>
                 <div>
                     <h1>Folder backup</h1>
@@ -277,13 +277,13 @@
                     <div class="field">
                         <label class="field-label" for="config-mode">Backup mode</label>
                         <select id="config-mode">
-                            <option value="full">Full archive every time</option>
-                            <option value="incremental">Incremental (periodic full + changes)</option>
+                            <option value="full">Standard (full archive every time)</option>
+                            <option value="incremental">Incremental (periodic Baseline + Delta changes)</option>
                         </select>
                     </div>
                 </div>
                 <div class="field" id="config-full-every-field" hidden>
-                    <label class="field-label" for="config-full-every">New full backup every (days)</label>
+                    <label class="field-label" for="config-full-every">New Baseline backup every (days)</label>
                     <input type="number" id="config-full-every" min="1" max="365" value="7">
                     <p class="field-hint muted">Between fulls, each backup stores only what changed
                         since the previous one. Restore automatically combines the whole chain.</p>
@@ -472,6 +472,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=1.5.8"></script>
+    <script src="app.js?v=1.5.9"></script>
 </body>
 </html>

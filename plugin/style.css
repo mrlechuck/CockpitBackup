@@ -16,6 +16,8 @@
     --danger-hover: #a30000;
     --success: #3e8635;
     --incr: #7c3aed;
+    --baseline: #0e8ca8;
+    --delta: #d6336c;
     --success-hover: #2f6929;
     --warning: #dc9a00;
     --warning-hover: #b57f00;
@@ -46,6 +48,8 @@
         --danger-hover: #ee5b4f;
         --success: #56a446;
         --incr: #a78bfa;
+        --baseline: #38bdf8;
+        --delta: #f472a3;
         --success-hover: #6fbd5f;
         --warning: #f0ab00;
         --warning-hover: #ffc02b;
@@ -413,15 +417,19 @@ select { cursor: pointer; }
     vertical-align: 1px;
 }
 .level-full {
-    background: color-mix(in srgb, var(--success, #3e8635) 18%, transparent);
-    color: var(--success, #3e8635);
+    background: color-mix(in srgb, var(--success) 18%, transparent);
+    color: var(--success);
 }
-.level-incr {
-    background: color-mix(in srgb, var(--incr) 18%, transparent);
-    color: var(--incr);
+.level-baseline {
+    background: color-mix(in srgb, var(--baseline) 20%, transparent);
+    color: var(--baseline);
+}
+.level-delta {
+    background: color-mix(in srgb, var(--delta) 20%, transparent);
+    color: var(--delta);
 }
 
-/* Incremental-mode badge on config rows (same violet family as Incr archives) */
+/* Mode badge on config rows: Standard (green) or Incremental (violet) */
 .mode-badge {
     display: inline-block;
     white-space: nowrap;
@@ -434,6 +442,12 @@ select { cursor: pointer; }
     text-transform: uppercase;
     letter-spacing: 0.03em;
     vertical-align: 1px;
+}
+.mode-standard {
+    background: color-mix(in srgb, var(--success) 18%, transparent);
+    color: var(--success);
+}
+.mode-incremental {
     background: color-mix(in srgb, var(--incr) 18%, transparent);
     color: var(--incr);
 }
