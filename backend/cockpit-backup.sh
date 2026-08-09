@@ -39,6 +39,7 @@ CLEANUP_TRIGGER=""
 CLEANUP_SNAR=""
 RESTORE_TMPD=""
 cleanup() {
+    [ -n "$CLEANUP_PROGRESS_SLUG" ] && progress_clear "$CLEANUP_PROGRESS_SLUG"
     if [ -n "$CLEANUP_FILE" ]; then
         rm -f "$CLEANUP_FILE" "${CLEANUP_FILE%.partial}.meta"
         [ -n "$CLEANUP_FOLDER" ] && \
@@ -116,6 +117,36 @@ DEST=$(cfg_get destination /var/backups/cockpit-backup)
 RETENTION=$(cfg_get retention_days 30)
 REMOTE_TMP="$DEST/.tmp"
 SNAR_DIR="$DEST/.snar"
+PROGRESS_DIR="$DEST/.progress"
+
+# GNU tar supports --checkpoint (used for archive progress); others (bsdtar,
+# busybox) don't — fall back to indeterminate progress there.
+if tar --version 2>/dev/null | grep -qi 'GNU tar'; then TAR_CKPT=true; else TAR_CKPT=false; fi
+
+# ---------- Live progress ----------
+# Each running backup writes its current phase/percentage to
+# $PROGRESS_DIR/<slug>.json; `list` reads it so the UI shows spinner + phase +
+# "step N of M" + percentage + ETA, and it survives page reloads.
+# P_STEP / P_STEPS are set per run (total phases: backup, +scan if incremental,
+# +upload if S3).
+P_STEP=1
+P_STEPS=1
+P_FOLDER=""
+CLEANUP_PROGRESS_SLUG=""
+
+progress_set() {   # progress_set SLUG PHASE PCT ETA DETAIL   (pct/eta empty → null)
+    mkdir -p "$PROGRESS_DIR"
+    local pct="${3:-}" eta="${4:-}" detail="${5:-}"
+    [ -n "$pct" ] || pct=null
+    [ -n "$eta" ] || eta=null
+    if [ -n "$detail" ]; then detail="\"$detail\""; else detail=null; fi
+    printf '{"folder":"%s","phase":"%s","step":%s,"steps":%s,"pct":%s,"eta":%s,"detail":%s,"ts":%s}' \
+        "$P_FOLDER" "$2" "${P_STEP:-1}" "${P_STEPS:-1}" "$pct" "$eta" "$detail" "$(date +%s)" \
+        > "$PROGRESS_DIR/$1.json.tmp" 2>/dev/null && \
+        mv -f "$PROGRESS_DIR/$1.json.tmp" "$PROGRESS_DIR/$1.json" 2>/dev/null || true
+}
+
+progress_clear() { rm -f "$PROGRESS_DIR/$1.json" "$PROGRESS_DIR/$1.json.tmp" 2>/dev/null || true; }
 
 # ---------- S3 remote storage ----------
 
@@ -272,11 +303,155 @@ chain_commit() {
     CLEANUP_SNAR=""
 }
 
+# measure_folder FOLDER SINCE_TS BASELINE SLUG MODE(scan|measure) → "DEN FILECOUNT"
+# Walks the folder honoring the same excludes as the backup. In "scan" mode it
+# also streams scan progress (pct from the previous run's file count) and DEN is
+# the changed bytes (mtime > SINCE_TS); in "measure" mode DEN is the total bytes.
+measure_folder() {
+    local folder="$1" since="$2" baseline="$3" mslug="$4" mode="$5"
+    local -a exc=()
+    local e
+    while IFS= read -r e; do [ -n "$e" ] && exc+=("$e"); done < <(cfg_excludes "$folder")
+    # Excludes are passed as ARGS (not stdin): the heredoc IS python's stdin.
+    python3 - "$folder" "$since" "$baseline" "$PROGRESS_DIR/$mslug.json" "$mode" \
+        "${P_STEP:-1}" "${P_STEPS:-1}" "$folder" ${exc[@]+"${exc[@]}"} <<'PYEOF'
+import os, sys, time, fnmatch, json
+folder = sys.argv[1].rstrip('/') or '/'
+since = float(sys.argv[2] or 0)
+baseline = int(sys.argv[3] or 0)
+progf, mode, step, steps, folder_full = sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8]
+patterns = []
+for p in sys.argv[9:]:
+    p = p.strip()
+    if not p:
+        continue
+    if p.startswith('/'):
+        if p == folder or p.startswith(folder + '/'):
+            p = p[len(folder) + 1:]
+        else:
+            continue
+    patterns.append(p.rstrip('/'))
+def excluded(rel, name):
+    return any(fnmatch.fnmatch(rel, q) or fnmatch.fnmatch(name, q) for q in patterns)
+def write_prog(pct, eta, detail):
+    try:
+        tmp = progf + '.tmp'
+        json.dump({"folder": folder_full, "phase": "scan", "step": int(step), "steps": int(steps),
+                   "pct": pct, "eta": eta, "detail": detail, "ts": int(time.time())},
+                  open(tmp, 'w'))
+        os.replace(tmp, progf)
+    except Exception:
+        pass
+total = changed = count = 0
+start = time.time(); last = 0.0
+for root, dirs, names in os.walk(folder):
+    rr = os.path.relpath(root, folder)
+    def rel(n):
+        return n if rr == '.' else rr + '/' + n
+    dirs[:] = [d for d in dirs if not excluded(rel(d), d)]
+    for n in names:
+        if excluded(rel(n), n):
+            continue
+        try:
+            st = os.lstat(os.path.join(root, n))
+        except OSError:
+            continue
+        count += 1
+        total += st.st_size
+        if st.st_mtime > since:
+            changed += st.st_size
+        if mode == 'scan':
+            now = time.time()
+            if now - last >= 0.5:
+                last = now
+                pct = eta = None
+                if baseline > 0:
+                    pct = min(99, int(count * 100 / baseline))
+                    el = max(0.001, now - start); rate = count / el
+                    if rate > 0:
+                        eta = int(max(0, (baseline - count) / rate))
+                write_prog(pct, eta, "%d files" % count)
+print("%d %d" % (changed if mode == 'scan' else total, count))
+PYEOF
+}
+
+# upload_progress SLUG START_TS  — reads `aws s3 cp` progress on stdin, writes
+# the upload phase percentage/ETA, and forwards non-progress lines to stderr.
+# The parser lives in a temp file so python's stdin stays the aws pipe (a
+# heredoc program would otherwise consume stdin).
+upload_progress() {
+    mkdir -p "$PROGRESS_DIR"
+    local rd="$PROGRESS_DIR/.upreader.py"
+    if [ ! -f "$rd" ]; then
+        cat > "$rd" <<'PYEOF'
+import sys, re, json, time, os
+progf, start, step, steps, folder = sys.argv[1], float(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
+units = {"Bytes": 1, "B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4,
+         "KB": 1000, "MB": 1000**2, "GB": 1000**3}
+pat = re.compile(r"Completed\s+([\d.]+)\s+(\w+)/~?\s*([\d.]+)\s+(\w+)")
+last = 0.0
+for line in sys.stdin:
+    m = pat.search(line)
+    if not m:
+        sys.stderr.write(line)
+        continue
+    done = float(m.group(1)) * units.get(m.group(2), 1)
+    total = float(m.group(3)) * units.get(m.group(4), 1)
+    now = time.time()
+    if now - last < 1:
+        continue
+    last = now
+    pct = min(99, int(done * 100 / total)) if total > 0 else None
+    el = max(0.001, now - start); rate = done / el
+    eta = int(max(0, (total - done) / rate)) if rate > 0 else None
+    try:
+        tmp = progf + '.tmp'
+        json.dump({"folder": folder, "phase": "upload", "step": int(step), "steps": int(steps),
+                   "pct": pct, "eta": eta, "detail": None, "ts": int(now)}, open(tmp, 'w'))
+        os.replace(tmp, progf)
+    except Exception:
+        pass
+PYEOF
+    fi
+    python3 "$rd" "$PROGRESS_DIR/$1.json" "$2" "${P_STEP:-1}" "${P_STEPS:-1}" "$P_FOLDER"
+}
+
+# Reader for tar's checkpoint output on stderr. Runs during the archive phase
+# and sees backup_one's locals (den, CKN, REC, archive_start, slug) via dynamic
+# scope. Non-checkpoint lines are forwarded to stderr. Progress writes are
+# throttled to ~once per second.
+archive_reader() {
+    local lastw=0 cline n bytes now pct el rate rem eta
+    while IFS= read -r cline; do
+        case "$cline" in
+            "CKPT "*)
+                [ "${den:-0}" -gt 0 ] || continue
+                n=${cline#CKPT }
+                bytes=$(( n * CKN * REC ))
+                now=$(date +%s)
+                [ "$now" -le "$lastw" ] && continue
+                lastw=$now
+                pct=$(( bytes * 100 / den ))
+                [ "$pct" -gt 99 ] && pct=99
+                [ "$pct" -lt 0 ] && pct=0
+                el=$(( now - archive_start )); [ "$el" -lt 1 ] && el=1
+                rate=$(( bytes / el ))
+                rem=$(( den - bytes )); [ "$rem" -lt 0 ] && rem=0
+                eta=0; [ "$rate" -gt 0 ] && eta=$(( rem / rate ))
+                progress_set "$slug" archive "$pct" "$eta" ""
+                ;;
+            "Removing leading"*) : ;;
+            *) printf '%s\n' "$cline" >&2 ;;
+        esac
+    done
+}
+
 backup_one() {
     local folder="$1" stamp="$2" trigger="${3:-manual}"
     local slug name archive tmp workdir rel start_ts remote
     slug=$(slug_of "$folder")
     rel="${folder#/}"
+    P_FOLDER="$folder"
 
     # Incremental mode: pick the level for this run. Classic folders keep the
     # unsuffixed archive name; chain members are tagged -full / -incr (the
@@ -391,8 +566,48 @@ EOF
     CLEANUP_FILE="$tmp"
     CLEANUP_FOLDER="$folder"
     CLEANUP_TRIGGER="$trigger"
-    tar -czf "$tmp" ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
-        2> >(grep -v 'Removing leading' >&2 || true)
+    CLEANUP_PROGRESS_SLUG="$slug"
+
+    # Phase plan for the progress UI: [scan?] → backup → [upload?]
+    local is_scan=false
+    if $incremental && [ "$level" = "1" ]; then is_scan=true; fi
+    P_STEPS=1
+    $is_scan && P_STEPS=$((P_STEPS + 1))
+    [ "$remote" = "true" ] && P_STEPS=$((P_STEPS + 1))
+    local backup_step=1
+    $is_scan && backup_step=2
+
+    # ---- Measure / scan → denominator (bytes tar will archive) -----------
+    local den=0 filecount=0 since_ts=0 baseline=0
+    if $is_scan; then
+        P_STEP=1
+        since_ts="$chain_started"
+        [ -f "$SNAR_DIR/$slug.count" ] && baseline=$(cat "$SNAR_DIR/$slug.count" 2>/dev/null || echo 0)
+        progress_set "$slug" scan "" "" "scanning…"
+        read -r den filecount < <(measure_folder "$folder" "$since_ts" "$baseline" "$slug" scan)
+    else
+        read -r den filecount < <(measure_folder "$folder" 0 0 "$slug" measure)
+    fi
+    case "$den" in ''|*[!0-9]*) den=0 ;; esac
+    if $incremental && [ -n "$filecount" ]; then
+        echo "$filecount" > "$SNAR_DIR/$slug.count" 2>/dev/null || true
+    fi
+
+    # ---- Archive (tar) with checkpoint-based progress --------------------
+    P_STEP="$backup_step"
+    local CKN=2000 REC=10240 archive_start
+    archive_start=$(date +%s)
+    if $TAR_CKPT; then
+        progress_set "$slug" archive 0 "" ""
+        tar --checkpoint="$CKN" --checkpoint-action=echo='CKPT %u' \
+            -czf "$tmp" ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
+            2> >(archive_reader)
+    else
+        # No checkpoint support: indeterminate archive progress
+        progress_set "$slug" archive "" "" "archiving…"
+        tar -czf "$tmp" ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
+            2> >(grep -v 'Removing leading' >&2 || true)
+    fi
 
     local size_h size_b dur tar_dur
     size_h=$(du -h "$tmp" | cut -f1)
@@ -407,7 +622,9 @@ EOF
         log_line "$folder" "$trigger" "S3 upload started: $name → s3://$bucket/$key"
         echo "  Uploading to S3: s3://$bucket/$key ($size_h)"
         up_start=$(date +%s)
-        if s3_run s3 cp "$tmp" "s3://$bucket/$key" --only-show-errors; then
+        P_STEP="$P_STEPS"   # upload is always the last phase
+        progress_set "$slug" upload 0 "" ""
+        if s3_run s3 cp "$tmp" "s3://$bucket/$key" 2> >(upload_progress "$slug" "$up_start"); then
             # Meta stub in the destination keeps the remote archive visible in the UI
             python3 - "$archive.meta" "$folder" "$trigger" "$size_b" "$meta_level" "$meta_chain" "$meta_base" <<'EOF'
 import json, sys, time
@@ -453,11 +670,16 @@ EOF
         echo "  Archive: $archive"
         echo "  Size: $size_h"
     fi
+
+    progress_clear "$slug"
+    CLEANUP_PROGRESS_SLUG=""
 }
 
 prune() {
     # Remove backups older than each folder's retention (global default for the rest)
     echo "Pruning old backups…"
+    # Drop progress files left by a hard-killed run (normal runs clear their own)
+    find "$PROGRESS_DIR" -maxdepth 1 -name '*.json*' -mmin +60 -delete 2>/dev/null || true
     local out
     out=$(python3 - "$CONFIG" "$DEST" "$RETENTION" <<'EOF'
 import json, os, glob, sys, time
@@ -835,23 +1057,30 @@ for mp in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
 
 archives.sort(key=lambda x: x["mtime"], reverse=True)
 
-# In-progress backups: a .partial file plus the .meta written at start
-# (remote ones run inside .tmp/)
-running = []
+# In-progress backups. Keyed by folder so the scan phase (which has a progress
+# file but no .partial yet) and the archive/upload phases all merge into one
+# entry. Base info comes from the .partial+.meta marker; live phase/percentage
+# comes from the .progress/<slug>.json file (fresh ts = still running).
+import time as _time
+now_ts = _time.time()
+running_map = {}
 for pat in ("backup-*.tar.gz.partial", os.path.join(".tmp", "backup-*.tar.gz.partial")):
     for p in glob.glob(os.path.join(dest, pat)):
-        meta_path = p[:-8] + ".meta"
-        if not os.path.exists(meta_path):
-            continue
-        meta = read_meta(meta_path)
-        if meta.get("folder"):
-            running.append({
-                "name": os.path.basename(p)[:-8],
-                "folder": meta.get("folder"),
-                "trigger": meta.get("trigger"),
-                "remote": bool(meta.get("s3")),
-                "level": meta.get("level"),
-            })
+        meta = read_meta(p[:-8] + ".meta")
+        f = meta.get("folder")
+        if f:
+            running_map[f] = {"folder": f, "trigger": meta.get("trigger"),
+                              "remote": bool(meta.get("s3")), "level": meta.get("level")}
+for pf in glob.glob(os.path.join(dest, ".progress", "*.json")):
+    pr = read_meta(pf)
+    f = pr.get("folder")
+    if not f or now_ts - pr.get("ts", 0) > 120:   # stale (crashed) → ignore
+        continue
+    ent = running_map.get(f, {"folder": f})
+    ent.update({"phase": pr.get("phase"), "step": pr.get("step"), "steps": pr.get("steps"),
+                "pct": pr.get("pct"), "eta": pr.get("eta"), "detail": pr.get("detail")})
+    running_map[f] = ent
+running = list(running_map.values())
 
 # Free space on the destination filesystem (nearest existing parent)
 p = dest
@@ -1087,6 +1316,9 @@ cmd_clear_log() {
     : > "$f" 2>/dev/null || true
     echo "Log cleared."
 }
+
+# Let tests source the script for its functions without running a command
+[ "${COCKPIT_BACKUP_NO_MAIN:-}" = 1 ] && return 0 2>/dev/null
 
 case "${1:-}" in
     backup)         shift; cmd_backup "${1:-}" ;;

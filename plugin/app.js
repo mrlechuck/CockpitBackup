@@ -43,25 +43,45 @@ if (typeof cockpit === "undefined") {
                 "2026-08-07 02:00:01 [scheduled] Backup started\n" +
                 "2026-08-07 02:00:26 [scheduled] Completed: backup-etc-20260807-020000.tar.gz (12M) in 25s\n"
         };
-        // For manual testing: simulate a scheduled backup starting on a folder.
-        // opts: { remote: bool, fail: bool } — fail simulates an S3 upload failure
-        window.__simulateScheduled = function (folder, seconds, opts) {
+        // For manual testing: simulate a scheduled backup progressing through its
+        // phases. opts: { incr: bool, s3: bool } → adds a scan / upload phase.
+        window.__simulateScheduled = function (folder, opts) {
             opts = opts || {};
-            mockRunning.push({ name: "backup-sim.tar.gz", folder, trigger: "scheduled", remote: !!opts.remote });
-            setTimeout(() => {
-                const i = mockRunning.findIndex(r => r.folder === folder);
-                if (i !== -1) mockRunning.splice(i, 1);
-                mockArchives.unshift({
-                    name: "backup-sim-" + Date.now() + ".tar.gz", size: 5000000,
-                    mtime: Math.floor(Date.now() / 1000), folder, trigger: "scheduled",
-                    remote: !!opts.remote && !opts.fail
-                });
-            }, (seconds || 12) * 1000);
+            const phases = [];
+            if (opts.incr) phases.push("scan");
+            phases.push("archive");
+            if (opts.s3) phases.push("upload");
+            const steps = phases.length;
+            const entry = { folder, trigger: "scheduled", remote: !!opts.s3,
+                            phase: phases[0], step: 1, steps, pct: 0, eta: null };
+            mockRunning.push(entry);
+            let pi = 0, pct = 0;
+            const t = setInterval(() => {
+                pct += 11;
+                if (pct >= 100) {
+                    pct = 0; pi++;
+                    if (pi >= phases.length) {
+                        clearInterval(t);
+                        const i = mockRunning.indexOf(entry);
+                        if (i !== -1) mockRunning.splice(i, 1);
+                        mockArchives.unshift({
+                            name: "backup-sim-" + Date.now() + ".tar.gz", size: 5000000,
+                            mtime: Math.floor(Date.now() / 1000), folder,
+                            trigger: "scheduled", remote: !!opts.s3
+                        });
+                        return;
+                    }
+                    entry.phase = phases[pi]; entry.step = pi + 1;
+                }
+                entry.pct = Math.min(99, pct);
+                entry.eta = Math.max(1, Math.round((100 - pct) / 11 * 1.2));
+            }, 1000);
         };
         function promiseWith(fns) {
             let streamCb = null;
             const p = new Promise(fns.run ? (res, rej) => fns.run(res, rej, d => streamCb && streamCb(d)) : r => r(fns.out || ""));
             p.stream = cb => { streamCb = cb; return p; };
+            p.close = () => {};   // mock: aborting is a no-op
             return p;
         }
         return {
@@ -374,6 +394,47 @@ function isRunning(folder) {
     return running.some(r => r.folder === folder);
 }
 
+function formatDuration(s) {
+    s = Math.max(0, Math.round(s));
+    if (s < 60) return s + "s";
+    const m = Math.floor(s / 60), ss = s % 60;
+    if (m < 60) return m + "m " + (ss ? ss + "s" : "");
+    const h = Math.floor(m / 60);
+    return h + "h " + (m % 60) + "m";
+}
+
+/* Human text for a running backup: "<Phase> (N of M) · 62% · ETA 40s".
+ * When there's no percentage yet (scan without a baseline, or an indeterminate
+ * archive), it falls back to the phase + detail. */
+function progressText(r) {
+    const labels = { scan: "Scanning", archive: "Backing up", upload: "Uploading to S3" };
+    let s = labels[r.phase] || "Working";
+    if (r.steps > 1) s += " (" + (r.step || 1) + " of " + r.steps + ")";
+    if (typeof r.pct === "number") {
+        s += " · " + r.pct + "%";
+        if (typeof r.eta === "number") s += " · ETA " + formatDuration(r.eta);
+    } else if (r.detail) {
+        s += " · " + r.detail;
+    } else {
+        s += "…";
+    }
+    return s;
+}
+
+/* Full-width progress strip shown under a running config row */
+function progressRow(r) {
+    const li = document.createElement("li");
+    li.className = "config-progress";
+    const spin = document.createElement("span");
+    spin.className = "row-spinner";
+    const text = document.createElement("span");
+    text.className = "progress-text";
+    text.textContent = progressText(r);
+    li.appendChild(spin);
+    li.appendChild(text);
+    return li;
+}
+
 function archivesFor(folder) {
     if (folder === OTHER) {
         const configured = new Set(config.backups.map(b => b.folder));
@@ -430,7 +491,11 @@ function renderListView() {
         .sort((x, y) =>
             entryTime(x.b).localeCompare(entryTime(y.b)) ||
             (x.b.title || x.b.folder).localeCompare(y.b.title || y.b.folder))
-        .forEach(({ b, idx }) => list.appendChild(configRow(b, idx)));
+        .forEach(({ b, idx }) => {
+            list.appendChild(configRow(b, idx));
+            const r = running.find(x => x.folder === b.folder);
+            if (r) list.appendChild(progressRow(r));
+        });
 
     if (orphans.length > 0)
         list.appendChild(otherRow(orphans));
@@ -500,11 +565,6 @@ function configRow(b, idx) {
 
     const actions = document.createElement("div");
     actions.className = "config-actions";
-    if (isRunning(b.folder)) {
-        const spin = document.createElement("span");
-        spin.className = "row-spinner";
-        actions.appendChild(spin);
-    }
     actions.appendChild(stats);
 
     const toggleWrap = document.createElement("label");
@@ -1307,6 +1367,13 @@ function openRestoreDialog(item) {
     $("restore-target").disabled = true;
     $("mode-original").checked = true;
     $("restore-warning").hidden = false;
+    // Reset the footer: Restore + Cancel visible, OK hidden (a previous restore
+    // may have left it showing OK)
+    restoreProc = null;
+    $("restore-confirm").hidden = false;
+    $("restore-cancel").hidden = false;
+    $("restore-ok").hidden = true;
+    setLoading($("restore-confirm"), false);
     openModal("restore-dialog");
 }
 
@@ -1316,6 +1383,8 @@ function updateRestoreMode() {
     $("restore-warning").hidden = custom;
     if (custom) $("restore-target").focus();
 }
+
+let restoreProc = null;   // the running restore process (for Cancel to abort)
 
 function doRestore() {
     const custom = $("mode-custom").checked;
@@ -1336,16 +1405,48 @@ function doRestore() {
     setLoading(btn, true);
 
     const proc = cockpit.spawn(args, { superuser: "require", err: "out" });
+    restoreProc = proc;
     proc.stream(data => {
         out.textContent += data;
         out.scrollTop = out.scrollHeight;
     });
-    proc.then(() => toast("Restore completed", "success"));
+    proc.then(() => {
+        toast("Restore completed", "success");
+        restoreFinished();
+    });
     proc.catch(err => {
+        // A user-initiated abort rejects too — don't report it as a failure
+        if (restoreProc === null) return;
         out.textContent += "\nError: " + errText(err) + "\n";
         toast("Restore failed", "danger");
+        restoreFinished();
     });
-    proc.finally(() => setLoading(btn, false));
+    proc.finally(() => { setLoading(btn, false); restoreProc = null; });
+}
+
+/* On completion swap Restore/Cancel for a single OK that closes the dialog */
+function restoreFinished() {
+    $("restore-confirm").hidden = true;
+    $("restore-cancel").hidden = true;
+    $("restore-ok").hidden = false;
+}
+
+/* Cancel: while a restore runs it aborts the process (with a warning, since a
+ * half-finished restore may leave partially-written files); otherwise it just
+ * closes the dialog. */
+function restoreCancel() {
+    if (restoreProc) {
+        if (!confirm("Stop the restore now? Files already written are kept — the restore would be incomplete."))
+            return;
+        const p = restoreProc;
+        restoreProc = null;      // mark as user-aborted before closing
+        try { p.close("cancelled"); } catch (e) { /* already gone */ }
+        $("restore-output").textContent += "\nRestore cancelled by user.\n";
+        toast("Restore cancelled", "info");
+        restoreFinished();
+    } else {
+        closeModal("restore-dialog");
+    }
 }
 
 /* ---------- Init ---------- */
@@ -1384,6 +1485,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Modals
     $("restore-confirm").addEventListener("click", doRestore);
+    $("restore-cancel").addEventListener("click", restoreCancel);
     $("delete-confirm").addEventListener("click", doDelete);
     $("mode-original").addEventListener("change", updateRestoreMode);
     $("mode-custom").addEventListener("change", updateRestoreMode);
@@ -1428,9 +1530,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // Keep the view in sync with backups started elsewhere (timer, other tabs):
-    // the .partial+meta marker on the server survives page reloads, so the
-    // spinner stays until the backup actually finishes.
-    setInterval(() => {
-        refreshArchives().then(renderIfChanged);
-    }, 8000);
+    // the server-side markers survive page reloads. Poll fast while a backup is
+    // running (so the phase/percentage strip updates smoothly), slow otherwise.
+    function poll() {
+        const delay = running.length ? 1500 : 8000;
+        setTimeout(() => {
+            refreshArchives().then(() => { renderIfChanged(); poll(); });
+        }, delay);
+    }
+    poll();
 });

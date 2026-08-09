@@ -20,9 +20,12 @@ folder**, each with its own schedule, right from the web interface:
   shows the current folder size with exclusions applied
 - **Per-folder backup log** in the detail view (start/finish, size, duration,
   trigger), with a clear-log button; logs live in `/var/log/cockpit-backup/`
-- **Live progress**: while a backup runs, its row shows an animated indicator and a
-  toast announces automatic runs — the state comes from the server, so it survives
-  page reloads and disappears only when the backup actually ends
+- **Live progress**: while a backup runs, a strip under its row shows spinner +
+  phase + "step N of M" + percentage + ETA (scan → backup → S3 upload as
+  applicable). The state comes from the server, so it survives page reloads and
+  disappears only when the backup actually ends
+- **Restore controls**: the restore dialog streams its output, ends with an OK
+  button, and its Cancel actually aborts an in-progress restore
 - **Catch-up marker**: archives created by recovering a missed schedule carry an
   info icon with an explanatory tooltip
 - **S3 remote storage**: per-folder choice between local disk and Amazon S3 (or any

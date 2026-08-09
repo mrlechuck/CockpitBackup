@@ -860,6 +860,24 @@ select { cursor: pointer; }
     margin-right: 0.2rem;
 }
 
+/* Full-width live-progress strip under a running config row */
+.config-progress {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.6rem 0.7rem;
+    margin: -0.2rem 0 0.4rem;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+}
+.config-progress .progress-text {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
 /* Info icon on catch-up archives */
 .catchup-info {
     display: inline-flex;
