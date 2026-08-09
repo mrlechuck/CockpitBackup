@@ -714,6 +714,26 @@ select { cursor: pointer; }
 .switch input:checked + .slider { background: var(--primary); }
 .switch input:checked + .slider::before { transform: translateX(21px); }
 
+/* S3 card header: switch + collapse chevron */
+.s3-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-shrink: 0;
+}
+.s3-collapse-btn {
+    border: none;
+    background: none;
+    padding: 0.25rem;
+    cursor: pointer;
+    color: var(--text-muted);
+    display: inline-flex;
+    border-radius: 6px;
+    transition: transform 0.15s, background 0.1s, color 0.1s;
+}
+.s3-collapse-btn:hover { background: var(--hover-row); color: var(--text); }
+.s3-collapse-btn.expanded { transform: rotate(180deg); }
+
 .switch-sm { width: 38px; height: 21px; }
 .switch-sm .slider::before { height: 15px; width: 15px; }
 .switch-sm input:checked + .slider::before { transform: translateX(17px); }

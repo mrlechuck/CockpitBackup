@@ -1111,6 +1111,7 @@ const S3_FIELD_IDS = ["s3-bucket", "s3-region", "s3-access-key", "s3-secret-key"
 // True while the S3 form has unsaved edits: the periodic refresh must never
 // overwrite what the user is typing (cleared on save)
 let s3Dirty = false;
+let s3Collapsed = true;   // the S3 card starts collapsed; the chevron toggles it
 
 function s3Ready() {
     return !!(config.s3 && config.s3.enabled && config.s3.bucket);
@@ -1132,10 +1133,9 @@ function renderS3() {
     badge.textContent = s3Ready() ? "Enabled" : "Disabled";
     badge.className = "badge " + (s3Ready() ? "badge-on" : "badge-off");
 
-    // Collapse the card when S3 is off: only header, switch and description remain
-    const collapsed = !$("s3-enabled").checked;
-    $("s3-fields").hidden = collapsed;
-    $("s3-footer").hidden = collapsed;
+    // Expand/collapse the card body via the chevron (independent of enabled).
+    $("s3-body").hidden = s3Collapsed;
+    $("s3-toggle").classList.toggle("expanded", !s3Collapsed);
 }
 
 function gatherS3() {
@@ -1470,7 +1470,14 @@ document.addEventListener("DOMContentLoaded", () => {
     $("save-settings").addEventListener("click", saveSettings);
     $("save-s3").addEventListener("click", () => saveS3());
     $("test-s3").addEventListener("click", testS3);
-    $("s3-enabled").addEventListener("change", () => saveS3());
+    $("s3-enabled").addEventListener("change", () => {
+        if ($("s3-enabled").checked) s3Collapsed = false;   // auto-expand to configure
+        saveS3();
+    });
+    $("s3-toggle").addEventListener("click", () => {
+        s3Collapsed = !s3Collapsed;
+        renderS3();
+    });
     S3_FIELD_IDS.forEach(id =>
         $(id).addEventListener("input", () => { s3Dirty = true; }));
     $("destination").addEventListener("input", () => { destDirty = true; });

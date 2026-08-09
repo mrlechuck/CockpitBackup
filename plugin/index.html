@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=1.4.0">
+    <link rel="stylesheet" href="style.css?v=1.4.1">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -59,11 +59,17 @@
                         Remote storage (S3)
                         <span id="s3-badge" class="badge badge-off">Disabled</span>
                     </h2>
-                    <label class="switch" title="Enable or disable S3 remote storage">
-                        <input type="checkbox" id="s3-enabled">
-                        <span class="slider"></span>
-                    </label>
+                    <div class="s3-header-actions">
+                        <label class="switch" title="Enable or disable S3 remote storage">
+                            <input type="checkbox" id="s3-enabled">
+                            <span class="slider"></span>
+                        </label>
+                        <button id="s3-toggle" class="s3-collapse-btn" aria-label="Expand or collapse S3 settings">
+                            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>
+                        </button>
+                    </div>
                 </div>
+                <div id="s3-body" hidden>
                 <p class="muted small">Backups of folders set to S3 storage are built in a temporary
                     folder, uploaded to the bucket and removed from the local disk. Requires the
                     <code>aws</code> CLI on the server. S3-compatible services work via the custom endpoint.</p>
@@ -106,6 +112,7 @@
                     <button id="test-s3" class="btn">Test connection</button>
                     <span id="s3-test-result" class="muted small"></span>
                 </div>
+                </div><!-- /#s3-body -->
             </section>
 
             <!-- Configured backups -->
@@ -451,6 +458,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=1.4.0"></script>
+    <script src="app.js?v=1.4.1"></script>
 </body>
 </html>
