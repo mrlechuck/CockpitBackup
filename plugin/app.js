@@ -214,6 +214,7 @@ let disk = null;           // destination filesystem usage (from `list`)
 let running = [];          // backups currently in progress (from `list`)
 let runningPrev = new Map(); // folder -> trigger, for start/finish notifications
 let archivesLoaded = false;
+let backupConsoleFolder = null; // which folder the "Backup now" output belongs to
 
 let editingIndex = -1;      // config being edited in the modal (-1 = new)
 let deletingIndex = -1;     // config being removed
@@ -690,6 +691,10 @@ function renderDetailView(folder) {
     $("detail-title").textContent = heading;
     $("detail-title").classList.toggle("mono-title", !isOther && !(entry && entry.title));
     $("detail-backup-card").hidden = isOther || !entry;
+
+    // The manual-backup output belongs to the folder it was launched on: show it
+    // only in that folder's detail view, never leaking into another config's.
+    $("backup-console").hidden = isOther || !entry || backupConsoleFolder !== folder;
 
     // Always show the backed-up path prominently, even when a title is set
     const pathEl = $("detail-path");
@@ -1237,6 +1242,7 @@ function checkTimerEngine() {
 function runBackup(folder, btn, consoleWrap, consoleOut) {
     setLoading(btn, true);
     if (consoleWrap) {
+        backupConsoleFolder = folder;                   // this output belongs to this folder
         consoleWrap.hidden = false;
         consoleOut.textContent = "";
         consoleOut.hidden = true;                       // output starts collapsed
@@ -1554,7 +1560,10 @@ document.addEventListener("DOMContentLoaded", () => {
     $("detail-backup-now").addEventListener("click", () => {
         runBackup(currentRoute(), $("detail-backup-now"), $("backup-console"), $("backup-output"));
     });
-    $("backup-console-close").addEventListener("click", () => { $("backup-console").hidden = true; });
+    $("backup-console-close").addEventListener("click", () => {
+        $("backup-console").hidden = true;
+        backupConsoleFolder = null;
+    });
     $("refresh-list").addEventListener("click", () => refreshArchives().then(render));
 
     // Output/log panels start collapsed; the chevron expands them on demand.
