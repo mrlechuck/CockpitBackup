@@ -119,25 +119,68 @@ REMOTE_TMP="$DEST/.tmp"
 SNAR_DIR="$DEST/.snar"
 PROGRESS_DIR="$DEST/.progress"
 
-# GNU tar supports --checkpoint (used for archive progress); others (bsdtar,
-# busybox) don't — fall back to indeterminate progress there.
-if tar --version 2>/dev/null | grep -qi 'GNU tar'; then TAR_CKPT=true; else TAR_CKPT=false; fi
-
-# Checkpoint granularity for tar progress. A checkpoint fires every N records of
-# 10240 bytes, so a fixed N makes the bar freeze on small archives (with N=2000
-# the first checkpoint only lands after ~20 MB — smaller backups never move).
-# Pick N from the known size so ~150 checkpoints span the whole run regardless of
-# size; fall back to a fine value when the size is unknown. REC (record size) is
-# 10240 = 20 * 512, GNU tar's default blocking factor.
-TAR_REC=10240
-ckpt_interval() {   # ckpt_interval BYTES → record count between checkpoints
-    local bytes="${1:-0}" n
-    case "$bytes" in ''|*[!0-9]*) bytes=0 ;; esac
-    if [ "$bytes" -le 0 ]; then echo 256; return; fi
-    n=$(( bytes / TAR_REC / 150 ))
-    [ "$n" -lt 16 ] && n=16
-    [ "$n" -gt 8192 ] && n=8192
-    echo "$n"
+# ---------- tar byte-counter progress ----------
+# tar's --checkpoint output proved unreliable to capture across environments, so
+# progress is measured with an inline byte counter piped between tar and gzip
+# (backup) or gzip and tar (restore). It counts the uncompressed stream, so it is
+# independent of the tar flavor/version. The parser lives in a temp file so
+# python's stdin stays the data pipe (a heredoc program would consume it).
+stream_counter_py() {   # stream_counter_py PATH — write the counter script if missing
+    local rd="$1"
+    [ -f "$rd" ] && return 0
+    mkdir -p "$(dirname "$rd")"
+    cat > "$rd" <<'PYEOF'
+import sys, os, json, time
+try:
+    import signal
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+except Exception:
+    pass
+mode = sys.argv[1]                       # 'file' (backup) or 'emit' (restore)
+den = int(sys.argv[2] or 0)
+start = float(sys.argv[3] or 0)
+inp, out = sys.stdin.buffer, sys.stdout.buffer
+total = 0
+last = 0.0
+def write_file(pct, eta, detail):
+    progf, folder, step, steps = sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7]
+    try:
+        tmp = progf + '.tmp'
+        json.dump({"folder": folder, "phase": "archive", "step": int(step), "steps": int(steps),
+                   "pct": pct, "eta": eta, "detail": detail, "ts": int(time.time())}, open(tmp, 'w'))
+        os.replace(tmp, progf)
+    except Exception:
+        pass
+def write_emit(pct, eta, detail):
+    try:
+        obj = {"phase": "extract", "member": int(sys.argv[4]), "members": int(sys.argv[5]),
+               "pct": pct, "eta": eta, "detail": detail}
+        sys.stderr.write("@@P@@ " + json.dumps(obj) + "\n"); sys.stderr.flush()
+    except Exception:
+        pass
+report = write_file if mode == 'file' else write_emit
+try:
+    while True:
+        chunk = inp.read(1 << 20)
+        if not chunk:
+            break
+        out.write(chunk)
+        total += len(chunk)
+        now = time.time()
+        if now - last >= 1:
+            last = now
+            if den > 0:
+                pct = min(99, int(total * 100 / den))
+                el = now - start if now > start else 0.001
+                rate = total / el
+                eta = int(max(0, (den - total) / rate)) if rate > 0 else None
+                report(pct, eta, None)
+            else:
+                report(None, None, "%d MB" % (total // 1048576))
+    out.flush()
+except BrokenPipeError:
+    pass
+PYEOF
 }
 
 # ---------- Live progress ----------
@@ -433,39 +476,6 @@ PYEOF
     python3 "$rd" "$PROGRESS_DIR/$1.json" "$2" "${P_STEP:-1}" "${P_STEPS:-1}" "$P_FOLDER"
 }
 
-# Reader for tar's checkpoint output on stderr. Runs during the archive phase
-# and sees backup_one's locals (den, CKN, REC, archive_start, slug) via dynamic
-# scope. Non-checkpoint lines are forwarded to stderr. Progress writes are
-# throttled to ~once per second.
-archive_reader() {
-    local lastw=0 cline n bytes now pct el rate rem eta
-    while IFS= read -r cline; do
-        case "$cline" in
-            "CKPT "*)
-                n=${cline#CKPT }
-                now=$(date +%s)
-                [ "$now" -le "$lastw" ] && continue
-                lastw=$now
-                bytes=$(( n * CKN * REC ))
-                if [ "${den:-0}" -gt 0 ]; then
-                    pct=$(( bytes * 100 / den ))
-                    [ "$pct" -gt 99 ] && pct=99
-                    [ "$pct" -lt 0 ] && pct=0
-                    el=$(( now - archive_start )); [ "$el" -lt 1 ] && el=1
-                    rate=$(( bytes / el ))
-                    rem=$(( den - bytes )); [ "$rem" -lt 0 ] && rem=0
-                    eta=0; [ "$rate" -gt 0 ] && eta=$(( rem / rate ))
-                    progress_set "$slug" archive "$pct" "$eta" ""
-                else
-                    progress_set "$slug" archive "" "" "$(( bytes / 1048576 )) MB"
-                fi
-                ;;
-            "Removing leading"*) : ;;
-            *) printf '%s\n' "$cline" >&2 ;;
-        esac
-    done
-}
-
 backup_one() {
     local folder="$1" stamp="$2" trigger="${3:-manual}"
     local slug name archive tmp workdir rel start_ts remote
@@ -624,22 +634,16 @@ except Exception:
     pass
 PYEOF
 
-    # ---- Archive (tar) with checkpoint-based progress --------------------
+    # ---- Archive: tar → byte counter → gzip (progress from the counter) ---
     P_STEP="$backup_step"
-    local REC="$TAR_REC" CKN archive_start
-    CKN=$(ckpt_interval "$den")
-    archive_start=$(date +%s)
-    if $TAR_CKPT; then
-        progress_set "$slug" archive 0 "" ""
-        tar --checkpoint="$CKN" --checkpoint-action=echo='CKPT %u' \
-            -czf "$tmp" ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
-            2> >(archive_reader)
-    else
-        # No checkpoint support: indeterminate archive progress
-        progress_set "$slug" archive "" "" "archiving…"
-        tar -czf "$tmp" ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
-            2> >(grep -v 'Removing leading' >&2 || true)
-    fi
+    local archive_start; archive_start=$(date +%s)
+    progress_set "$slug" archive 0 "" ""
+    local cpy="$PROGRESS_DIR/.counter.py"; stream_counter_py "$cpy"
+    tar -cf - ${tar_args[@]+"${tar_args[@]}"} -C / "$rel" \
+            2> >(grep -v 'Removing leading' >&2 || true) \
+        | python3 "$cpy" file "$den" "$archive_start" \
+            "$PROGRESS_DIR/$slug.json" "$P_FOLDER" "${P_STEP:-1}" "${P_STEPS:-1}" \
+        | gzip > "$tmp"
 
     local size_h size_b dur tar_dur
     size_h=$(du -h "$tmp" | cut -f1)
@@ -1228,36 +1232,6 @@ except Exception:
     print(0)' "$1"
 }
 
-# tar -x checkpoint reader: emits extract progress (RDEN=member usize, RCKN=its
-# checkpoint interval, RMEMBER/RMEMBERS, RSTART set by the caller). % only when
-# the uncompressed size is known.
-extract_reader() {
-    local lastw=0 cline n bytes now pct el rate rem eta
-    while IFS= read -r cline; do
-        case "$cline" in
-            "CKPT "*)
-                n=${cline#CKPT }
-                now=$(date +%s)
-                [ "$now" -le "$lastw" ] && continue
-                lastw=$now
-                bytes=$(( n * ${RCKN:-256} * TAR_REC ))
-                if [ "${RDEN:-0}" -gt 0 ]; then
-                    pct=$(( bytes * 100 / RDEN ))
-                    [ "$pct" -gt 99 ] && pct=99; [ "$pct" -lt 0 ] && pct=0
-                    el=$(( now - RSTART )); [ "$el" -lt 1 ] && el=1
-                    rate=$(( bytes / el )); rem=$(( RDEN - bytes )); [ "$rem" -lt 0 ] && rem=0
-                    eta=0; [ "$rate" -gt 0 ] && eta=$(( rem / rate ))
-                    restore_emit extract "$RMEMBER" "$RMEMBERS" "$pct" "$eta" ""
-                else
-                    restore_emit extract "$RMEMBER" "$RMEMBERS" "" "" "$(( bytes / 1048576 )) MB"
-                fi
-                ;;
-            "Removing leading"*) : ;;
-            *) printf '%s\n' "$cline" >&2 ;;
-        esac
-    done
-}
-
 # aws download reader: emits download progress as @@P@@ lines. Lives in a temp
 # file so python's stdin stays the aws pipe.
 restore_dl_reader() {   # member members start
@@ -1318,6 +1292,7 @@ cmd_restore() {
     RESTORE_TMPD=$(mktemp -d)
     local M=${#members[@]} idx=0 n a src usize
     [ "$M" -gt 1 ] && echo "Incremental archive: restoring its chain of $M backups …"
+    exec 4>&1   # save restore stdout so the byte counter can emit @@P@@ progress to it
     for n in "${members[@]}"; do
         idx=$((idx + 1))
         a=$(archive_path "$n")
@@ -1337,22 +1312,22 @@ cmd_restore() {
             die "archive not found: $a"
         fi
 
-        # Extract, with checkpoint-based progress when the tar supports it and
-        # the uncompressed size is known
+        # Extract with progress from the inline byte counter (uncompressed size
+        # known → percentage; unknown → MB processed)
         usize=$(archive_meta_usize "$a.meta")
         echo "Restoring $n to $target …"
-        RDEN=${usize:-0}; RMEMBER=$idx; RMEMBERS=$M; RSTART=$(date +%s)
-        RCKN=$(ckpt_interval "$RDEN")
+        local RDEN=${usize:-0}
         restore_emit extract "$idx" "$M" 0 "" ""
-        local -a xargs=(-xzf "$src" -C "$target")
+        local cpy="$RESTORE_TMPD/.counter.py"; stream_counter_py "$cpy"
+        local -a xargs=(-xf - -C "$target")
         [ "$M" -gt 1 ] && xargs+=(--listed-incremental=/dev/null)
-        if $TAR_CKPT; then
-            tar --checkpoint="$RCKN" --checkpoint-action=echo='CKPT %u' "${xargs[@]}" 2> >(extract_reader)
-        else
-            tar "${xargs[@]}" 2> >(grep -v 'Removing leading' >&2 || true)
-        fi
+        # gzip → byte counter (emits @@P@@ progress on fd 4 = restore stdout) → tar
+        gzip -dc "$src" \
+            | python3 "$cpy" emit "$RDEN" "$(date +%s)" "$idx" "$M" 2>&4 \
+            | tar "${xargs[@]}" 2> >(grep -v 'Removing leading' >&2 || true)
         [ "$src" = "$DEST/$n" ] || rm -f "$src"
     done
+    exec 4>&-
     rm -rf "$RESTORE_TMPD"
     RESTORE_TMPD=""
     restore_emit done "$M" "$M" 100 0 ""

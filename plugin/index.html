@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=1.5.4">
+    <link rel="stylesheet" href="style.css?v=1.5.5">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -15,7 +15,7 @@
         <div id="view-list">
             <header class="page-header">
                 <div class="app-icon" aria-hidden="true">
-                    <img src="app-icon.svg?v=1.5.4" alt="" width="30" height="30">
+                    <img src="app-icon.svg?v=1.5.5" alt="" width="30" height="30">
                 </div>
                 <div>
                     <h1>Folder backup</h1>
@@ -168,9 +168,14 @@
                 <div id="backup-console" class="console" hidden>
                     <div class="console-bar">
                         <span>Output</span>
-                        <button id="backup-console-close" class="console-close" title="Close">✕</button>
+                        <div class="console-bar-actions">
+                            <button id="backup-console-toggle" class="s3-collapse-btn" aria-label="Expand or collapse the output">
+                                <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>
+                            </button>
+                            <button id="backup-console-close" class="console-close" title="Close">✕</button>
+                        </div>
                     </div>
-                    <pre id="backup-output" class="console-body"></pre>
+                    <pre id="backup-output" class="console-body" hidden></pre>
                 </div>
             </section>
 
@@ -230,9 +235,12 @@
                             Refresh
                         </button>
                         <button id="log-clear" class="btn btn-small">Clear log</button>
+                        <button id="log-toggle" class="s3-collapse-btn" aria-label="Expand or collapse the log">
+                            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>
+                        </button>
                     </div>
                 </div>
-                <pre id="log-body" class="console-body log-body muted">Loading…</pre>
+                <pre id="log-body" class="console-body log-body muted" hidden>Loading…</pre>
             </section>
         </div>
     </div>
@@ -423,7 +431,13 @@
                 <div id="restore-progress" class="restore-progress" hidden></div>
 
                 <div id="restore-console" class="console" hidden>
-                    <pre id="restore-output" class="console-body"></pre>
+                    <div class="console-bar">
+                        <span>Output</span>
+                        <button id="restore-console-toggle" class="s3-collapse-btn" aria-label="Expand or collapse the output">
+                            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>
+                        </button>
+                    </div>
+                    <pre id="restore-output" class="console-body" hidden></pre>
                 </div>
             </div>
             <div class="modal-footer">
@@ -457,6 +471,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=1.5.4"></script>
+    <script src="app.js?v=1.5.5"></script>
 </body>
 </html>

@@ -1239,6 +1239,9 @@ function runBackup(folder, btn, consoleWrap, consoleOut) {
     if (consoleWrap) {
         consoleWrap.hidden = false;
         consoleOut.textContent = "";
+        consoleOut.hidden = true;                       // output starts collapsed
+        const tg = $("backup-console-toggle");
+        if (tg) tg.classList.remove("expanded");
     }
 
     const args = folder ? [HELPER, "backup", folder] : [HELPER, "backup"];
@@ -1389,6 +1392,8 @@ function openRestoreDialog(item) {
 
     $("restore-console").hidden = true;
     $("restore-output").textContent = "";
+    $("restore-output").hidden = true;                  // output starts collapsed
+    $("restore-console-toggle").classList.remove("expanded");
     $("restore-progress").hidden = true;
     $("restore-progress").textContent = "";
     $("restore-target").value = "";
@@ -1551,6 +1556,19 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     $("backup-console-close").addEventListener("click", () => { $("backup-console").hidden = true; });
     $("refresh-list").addEventListener("click", () => refreshArchives().then(render));
+
+    // Output/log panels start collapsed; the chevron expands them on demand.
+    const wireCollapse = (toggleId, bodyId) => {
+        const t = $(toggleId), body = $(bodyId);
+        if (!t || !body) return;
+        t.addEventListener("click", () => {
+            body.hidden = !body.hidden;
+            t.classList.toggle("expanded", !body.hidden);
+        });
+    };
+    wireCollapse("backup-console-toggle", "backup-output");
+    wireCollapse("restore-console-toggle", "restore-output");
+    wireCollapse("log-toggle", "log-body");
 
     // Modals
     $("restore-confirm").addEventListener("click", doRestore);

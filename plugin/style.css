@@ -950,6 +950,7 @@ select { cursor: pointer; }
     padding: 0.1rem 0.3rem;
 }
 .console-close:hover { color: var(--text); }
+.console-bar-actions { display: flex; align-items: center; gap: 0.25rem; }
 .console-body {
     margin: 0;
     padding: 0.7rem 0.8rem;
