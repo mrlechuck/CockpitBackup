@@ -352,10 +352,11 @@
                         </button>
                     </div>
                     <p id="tier-d-hint" class="field-hint tier-hint" hidden></p>
-                    <p class="field-hint muted">Tiers apply from the finest period to the coarsest, each
-                        window starting where the previous one ends. Within each period the newest
-                        backups survive (up to "keep"); anything past the last tier is removed.
-                        Incremental chains count as one backup and are kept or dropped as a whole.</p>
+                    <p class="field-hint muted">Each row is an independent rule: it looks back over its
+                        own window from today and keeps the newest "keep" backups per period. Rules
+                        overlap — a backup survives if any rule keeps it; anything older than every
+                        window is removed. Incremental chains count as one backup and are kept or
+                        dropped as a whole.</p>
                 </div>
 
                 <h3 class="modal-section-title">Exclusions</h3>

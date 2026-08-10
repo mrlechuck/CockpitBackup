@@ -19,9 +19,8 @@ if (typeof cockpit === "undefined") {
             backups: [
                 { folder: "/etc", time: "02:00", retention_days: 30, enabled: true, title: "System configuration", s3: true },
                 { folder: "/home/roberto/documents", every_hours: 3, enabled: true,
-                  retention: [{ keep: 1, per: "hour", span: 24 }, { keep: 6, per: "day", span: 1 },
-                              { keep: 1, per: "day", span: 7 }, { keep: 1, per: "week", span: 4 },
-                              { keep: 1, per: "month", span: 12 }] },
+                  retention: [{ keep: 1, per: "hour", span: 24 }, { keep: 1, per: "day", span: 7 },
+                              { keep: 1, per: "week", span: 4 }, { keep: 1, per: "month", span: 12 }] },
                 { folder: "/var/www", time: "03:00", enabled: false, excludes: ["cache", "*.log"], title: "Web sites", mode: "incremental", full_every: 7,
                   retention: { daily: { keep: 2, days: 7 }, weekly: { keep: 1, weeks: 4 },
                                monthly: { keep: 1, months: 12 }, yearly: { keep: 1, years: 5 } } }
@@ -927,9 +926,6 @@ function updateRetentionPanels() {
     updateTierHint();
 }
 
-/* Mirrors the backend's UNIT_SECONDS (month ≈ 30 days, year ≈ 365) */
-const TIER_UNIT_SECONDS = { hour: 3600, day: 86400, week: 7 * 86400,
-                            month: 30 * 86400, year: 365 * 86400 };
 /* Upper-bound bucket sizes for the "keep can never be met" check (31-day
  * month, 366-day year: conservative, so we only flag sure cases) */
 const TIER_UNIT_HOURS = { hour: 1, day: 24, week: 168, month: 744, year: 8784 };
@@ -951,16 +947,9 @@ function scheduleMaxPer(unit) {
     return runsPerDay * Math.ceil(TIER_UNIT_HOURS[unit] / 24);
 }
 
-function fmtAge(sec) {
-    if (sec % 86400 === 0 || sec > 2 * 86400)
-        return Math.round(sec / 86400) + "d";
-    return Math.round(sec / 3600) + "h";
-}
-
-/* Rows are kept in canonical order (finest unit first, larger keep first);
- * a unit or keep change re-sorts, so no manual reordering is ever needed.
- * Each row shows the age range its window actually covers — windows queue
- * up one after another, they never overlap. */
+/* Rows are kept in canonical order (finest unit first, larger keep first)
+ * purely for readability — rules are independent and overlap, each looking
+ * back over its own window from now; a backup survives if ANY rule keeps it. */
 function renderTierList() {
     modalTiers = sortTiers(modalTiers);
     const list = $("tier-list");
@@ -972,23 +961,11 @@ function renderTierList() {
         list.appendChild(el);
         return el;
     };
-    let cumul = 0;
     modalTiers.forEach((t, i) => {
-        const start = cumul;
-        cumul += t.span * TIER_UNIT_SECONDS[t.per];
-        // A keep can never be met when it exceeds what can reach this tier:
-        // backups arrive thinned by the schedule and by every tier above.
-        let cap = scheduleMaxPer(t.per);
-        let capSrc = "the schedule creates at most";
-        for (let j = 0; j < i; j++) {
-            const p = modalTiers[j];
-            const through = p.keep * Math.ceil(TIER_UNIT_HOURS[t.per] / TIER_UNIT_HOURS[p.per]);
-            if (through < cap) {
-                cap = through;
-                capSrc = "the " + p.keep + "/" + p.per + " tier above lets through at most";
-            }
-        }
-        cell("span", "tier-word", i === 0 ? "keep" : "then");
+        // A keep larger than what the schedule can create per period is
+        // never reached — the rule just keeps everything in its window
+        const cap = scheduleMaxPer(t.per);
+        cell("span", "tier-word", i === 0 ? "keep" : "and");
         // Inputs can't carry the ::after custom tooltip — wrap them
         const keepWrap = cell("span", "tier-keep-wrap");
         const keep = document.createElement("input");
@@ -998,9 +975,9 @@ function renderTierList() {
         keep.value = t.keep;
         if (t.keep > cap) {
             keep.classList.add("tier-warn");
-            keepWrap.dataset.tooltip = "Never reached: " + capSrc + " " + cap + " backup" +
-                (cap === 1 ? "" : "s") + " per " + t.per +
-                " — this tier keeps everything in its window.";
+            keepWrap.dataset.tooltip = "Never reached: the schedule creates at most " +
+                cap + " backup" + (cap === 1 ? "" : "s") + " per " + t.per +
+                " — this rule keeps everything in its window.";
         }
         keep.addEventListener("input", () => {
             t.keep = Math.min(100, Math.max(1, parseInt(keep.value, 10) || 1));
@@ -1030,14 +1007,10 @@ function renderTierList() {
         });
         span.addEventListener("change", renderTierList);
         cell("span", "tier-word", t.span === 1 ? t.per : TIER_PLURAL[t.per]);
-        const from = fmtAge(start), to = fmtAge(cumul);
-        const range = cell("span", "tier-range muted",
-            start === 0 ? "≤ " + to
-                        : (from.slice(-1) === to.slice(-1) ? from.slice(0, -1) : from) + "–" + to);
-        range.dataset.tooltip = start === 0
-            ? "This tier applies to backups up to " + to + " old."
-            : "This tier applies to backups between " + from + " and " + to +
-              " old — each window starts where the one above ends.";
+        const range = cell("span", "tier-range muted", "≤ " + t.span + TIER_ABBR[t.per]);
+        range.dataset.tooltip = "Looks at backups from the last " + t.span + " " +
+            (t.span === 1 ? t.per : TIER_PLURAL[t.per]) + " and keeps the newest " +
+            t.keep + " per " + t.per + ". Rules overlap — a backup survives if any rule keeps it.";
         const rm = cell("button", "tier-remove", "✕");
         rm.setAttribute("aria-label", "Remove tier");
         rm.addEventListener("click", () => {

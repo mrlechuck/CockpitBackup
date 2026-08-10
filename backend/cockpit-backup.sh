@@ -777,13 +777,13 @@ for mp in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
 # chain (classic full mode, legacy) are units of one.
 #
 # Flat rule (retention_days): the unit expires once older than N days.
-# Tiered rule (retention policy): an ordered list of tiers (keep, unit, span) —
-# keep at most `keep` units per calendar bucket of `unit` (hour, day, ISO week,
-# month, year) inside that tier's window; windows stack, each starting where
-# the previous one ends. Tiers apply in canonical order: finest unit first,
-# larger keep first within the same unit, so e.g. 6/day×1 precedes 1/day×7.
-# The newest unit of a folder is always kept as a safety net. Remote members
-# are printed as "RemoteExpired:" for the shell to delete on S3.
+# Tiered rule (retention policy): a list of independent, OVERLAPPING rules
+# (keep, unit, span), restic-style. Each rule looks back span×unit from now
+# and keeps the newest `keep` units per calendar bucket of `unit` (hour, day,
+# ISO week, month, year) inside that window. A unit survives if ANY rule
+# selects it; anything older than every window is dropped. The newest unit
+# of a folder is always kept as a safety net. Remote members are printed as
+# "RemoteExpired:" for the shell to delete on S3.
 import datetime as _dt
 
 UNIT_SECONDS = {"hour": 3600, "day": 86400, "week": 7 * 86400,
@@ -833,24 +833,17 @@ def bucket_id(unit, t):
 
 def gfs_keep(units, pol):
     tiers = norm_policy(pol)
-    bounds, b = [], 0
-    for keep, unit, span in tiers:
-        b += span * UNIT_SECONDS[unit]
-        bounds.append(b)
-    counts = {}
     kept = set()
-    for newest_ts, key in sorted(units, reverse=True):   # newest first
-        age = now - newest_ts
-        t = _dt.datetime.fromtimestamp(newest_ts)
-        for i, (keep, unit, span) in enumerate(tiers):
-            if age <= bounds[i]:
-                # Tier index in the bucket key keeps counters separate when
-                # two consecutive tiers share the same unit (6/day then 1/day)
-                bucket = (i, bucket_id(unit, t))
+    ordered = sorted(units, reverse=True)                # newest first
+    for keep, unit, span in tiers:
+        window = span * UNIT_SECONDS[unit]
+        counts = {}
+        for newest_ts, key in ordered:
+            if now - newest_ts <= window:
+                bucket = bucket_id(unit, _dt.datetime.fromtimestamp(newest_ts))
                 if counts.get(bucket, 0) < keep:
                     counts[bucket] = counts.get(bucket, 0) + 1
                     kept.add(key)
-                break
     return kept
 
 groups = {}

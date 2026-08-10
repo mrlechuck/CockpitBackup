@@ -14,7 +14,6 @@
         { "folder": "/etc", "every_hours": 3,
           "retention": [
               { "keep": 1, "per": "hour",  "span": 24 },
-              { "keep": 6, "per": "day",   "span": 1 },
               { "keep": 1, "per": "day",   "span": 7 },
               { "keep": 1, "per": "week",  "span": 4 },
               { "keep": 1, "per": "month", "span": 12 }
