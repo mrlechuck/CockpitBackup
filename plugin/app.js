@@ -1775,6 +1775,12 @@ function restoreCancel() {
 /* ---------- Init ---------- */
 
 document.addEventListener("DOMContentLoaded", () => {
+    // Footer version: read from app.js's own ?v= cache-busting query, which
+    // the release workflow already bumps — no separate version to maintain
+    const vScript = document.querySelector('script[src*="app.js"]');
+    const vMatch = vScript && vScript.getAttribute("src").match(/[?&]v=([^&]+)/);
+    $("app-version").textContent = vMatch ? "v" + vMatch[1] : "";
+
     // List view
     $("add-config").addEventListener("click", () => openConfigDialog(-1));
     $("config-save").addEventListener("click", saveConfigEntry);

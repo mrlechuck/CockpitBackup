@@ -1112,6 +1112,30 @@ select { cursor: pointer; }
  * margins a centered bubble would be clipped */
 .tier-keep-wrap[data-tooltip]::after { left: 0; transform: translateY(3px); }
 .tier-keep-wrap[data-tooltip]:hover::after { transform: translateY(0); }
+
+/* ---------- Footer: version + credit ---------- */
+
+.app-footer {
+    margin-top: 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.1rem;
+}
+.app-version {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+/* Same look as the login page's "by mrlechuck" (CockpitBranding #brand::after) */
+.app-credit {
+    font-size: 0.9rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: #22d3ee;
+    text-decoration: none;
+}
+.app-credit:hover { text-decoration: underline; }
 .tier-list input[type="number"] { width: 58px; text-align: right; }
 .tier-list select { width: auto; }
 .tier-word { font-weight: 600; }
