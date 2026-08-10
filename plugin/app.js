@@ -900,7 +900,7 @@ function renderTimesList() {
         empty.textContent = "No times yet — add at least one.";
         list.appendChild(empty);
     }
-    updateTierHint();
+    renderTierList();   // schedule density feeds the tier warnings and hint
 }
 
 function addModalTime() {
@@ -917,7 +917,7 @@ function updateSchedulePanels() {
     const every = $("sched-every").checked;
     $("schedule-times").hidden = every;
     $("schedule-every").hidden = !every;
-    updateTierHint();
+    renderTierList();   // schedule density feeds the tier warnings and hint
 }
 
 function updateRetentionPanels() {
@@ -930,6 +930,26 @@ function updateRetentionPanels() {
 /* Mirrors the backend's UNIT_SECONDS (month ≈ 30 days, year ≈ 365) */
 const TIER_UNIT_SECONDS = { hour: 3600, day: 86400, week: 7 * 86400,
                             month: 30 * 86400, year: 365 * 86400 };
+/* Upper-bound bucket sizes for the "keep can never be met" check (31-day
+ * month, 366-day year: conservative, so we only flag sure cases) */
+const TIER_UNIT_HOURS = { hour: 1, day: 24, week: 168, month: 744, year: 8784 };
+
+/* Max backups the current schedule can create per calendar bucket of `unit` */
+function scheduleMaxPer(unit) {
+    const every = $("sched-every").checked;
+    if (unit === "hour") {
+        if (every) return 1;                     // runs are at :00, one per hour slot
+        const perHour = {};
+        modalTimes.forEach(t => {
+            const h = t.split(":")[0];
+            perHour[h] = (perHour[h] || 0) + 1;
+        });
+        return Math.max(1, ...Object.values(perHour), 0);
+    }
+    const n = parseInt($("config-every-hours").value, 10) || 6;
+    const runsPerDay = every ? Math.max(1, Math.round(24 / n)) : Math.max(1, modalTimes.length);
+    return runsPerDay * Math.ceil(TIER_UNIT_HOURS[unit] / 24);
+}
 
 function fmtAge(sec) {
     if (sec % 86400 === 0 || sec > 2 * 86400)
@@ -956,11 +976,29 @@ function renderTierList() {
     modalTiers.forEach((t, i) => {
         const start = cumul;
         cumul += t.span * TIER_UNIT_SECONDS[t.per];
+        // A keep can never be met when it exceeds what can reach this tier:
+        // backups arrive thinned by the schedule and by every tier above.
+        let cap = scheduleMaxPer(t.per);
+        let capSrc = "the schedule creates at most";
+        for (let j = 0; j < i; j++) {
+            const p = modalTiers[j];
+            const through = p.keep * Math.ceil(TIER_UNIT_HOURS[t.per] / TIER_UNIT_HOURS[p.per]);
+            if (through < cap) {
+                cap = through;
+                capSrc = "the " + p.keep + "/" + p.per + " tier above lets through at most";
+            }
+        }
         cell("span", "tier-word", i === 0 ? "keep" : "then");
         const keep = cell("input");
         keep.type = "number";
         keep.min = 1; keep.max = 100;
         keep.value = t.keep;
+        if (t.keep > cap) {
+            keep.classList.add("tier-warn");
+            keep.title = "Never reached: " + capSrc + " " + cap + " backup" +
+                (cap === 1 ? "" : "s") + " per " + t.per +
+                " — this tier keeps everything in its window.";
+        }
         keep.addEventListener("input", () => {
             t.keep = Math.min(100, Math.max(1, parseInt(keep.value, 10) || 1));
         });
@@ -993,7 +1031,10 @@ function renderTierList() {
         const range = cell("span", "tier-range muted",
             start === 0 ? "≤ " + to
                         : (from.slice(-1) === to.slice(-1) ? from.slice(0, -1) : from) + "–" + to);
-        range.title = "Applies to backups " + (start === 0 ? "up to " + to : from + " to " + to) + " old";
+        range.title = start === 0
+            ? "This tier applies to backups up to " + to + " old."
+            : "This tier applies to backups between " + from + " and " + to +
+              " old — each window starts where the one above ends.";
         const rm = cell("button", "tier-remove", "✕");
         rm.setAttribute("aria-label", "Remove tier");
         rm.addEventListener("click", () => {
@@ -1720,7 +1761,7 @@ document.addEventListener("DOMContentLoaded", () => {
     $("config-new-time").addEventListener("keydown", ev => { if (ev.key === "Enter") addModalTime(); });
     $("sched-times").addEventListener("change", updateSchedulePanels);
     $("sched-every").addEventListener("change", updateSchedulePanels);
-    $("config-every-hours").addEventListener("change", updateTierHint);
+    $("config-every-hours").addEventListener("change", () => renderTierList());
     $("ret-simple").addEventListener("change", updateRetentionPanels);
     $("ret-tiered").addEventListener("change", updateRetentionPanels);
     $("tier-add").addEventListener("click", addModalTier);

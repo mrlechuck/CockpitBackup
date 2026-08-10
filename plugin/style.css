@@ -1106,6 +1106,14 @@ select { cursor: pointer; }
     font-size: 12px;
     white-space: nowrap;
     justify-self: end;
+    cursor: help;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+}
+/* A "keep" that can never be reached (schedule or a tier above lets fewer through) */
+.tier-list input.tier-warn {
+    border-color: var(--warning);
+    box-shadow: 0 0 0 1px var(--warning) inset;
 }
 .tier-list input[type="number"] { width: 58px; text-align: right; }
 .tier-list select { width: auto; }
