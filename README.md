@@ -82,8 +82,10 @@ access" button at the top).
 
 ### Multiple runs per day and tiered (GFS) retention
 
-Each backup can have **several daily times** (e.g. 02:00 and 14:00) or run
-**every N hours** (`"every_hours": 3` → 00:00, 03:00, …) and, instead of the flat
+Each backup can have **several daily times** (e.g. 02:00 and 14:00), run
+**every N hours** (`"every_hours": 3` → 00:00, 03:00, …) or even sub-hourly
+(`"every_minutes": 30` → :00 and :30 of every hour; any divisor of 60 works)
+and, instead of the flat
 "keep N days", a **tiered thinning policy**: a list of independent rules, each
 "keep the newest K backups per calendar period, looking back S periods from now":
 

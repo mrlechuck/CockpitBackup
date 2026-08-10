@@ -315,15 +315,16 @@
                 <div class="field" id="schedule-every" hidden>
                     <label class="field-label" for="config-every-hours">Run every</label>
                     <select id="config-every-hours">
-                        <option value="1">hour</option>
-                        <option value="2">2 hours</option>
-                        <option value="3">3 hours</option>
-                        <option value="4">4 hours</option>
-                        <option value="6" selected>6 hours</option>
-                        <option value="8">8 hours</option>
-                        <option value="12">12 hours</option>
+                        <option value="30">30 minutes</option>
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="180">3 hours</option>
+                        <option value="240">4 hours</option>
+                        <option value="360" selected>6 hours</option>
+                        <option value="480">8 hours</option>
+                        <option value="720">12 hours</option>
                     </select>
-                    <p class="field-hint muted">Runs at 00:00 and then every N hours — server's timezone.</p>
+                    <p class="field-hint muted">Runs from midnight at the chosen interval — server's timezone.</p>
                 </div>
 
                 <h3 class="modal-section-title">Retention</h3>

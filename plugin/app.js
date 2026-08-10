@@ -610,9 +610,11 @@ function configRow(b, idx) {
     const parts = [];
     parts.push(b.enabled === false
         ? "automatic backup off"
-        : (b.every_hours
-            ? "every " + b.every_hours + "h"
-            : "daily at " + entryTimesList(b).join(" + ")));
+        : (b.every_minutes
+            ? "every " + b.every_minutes + "min"
+            : (b.every_hours
+                ? "every " + b.every_hours + "h"
+                : "daily at " + entryTimesList(b).join(" + "))));
     parts.push(retentionLabel(b));
     if (b.excludes && b.excludes.length)
         parts.push(b.excludes.length === 1 ? "1 exclusion" : b.excludes.length + " exclusions");
@@ -930,21 +932,30 @@ function updateRetentionPanels() {
  * month, 366-day year: conservative, so we only flag sure cases) */
 const TIER_UNIT_HOURS = { hour: 1, day: 24, week: 168, month: 744, year: 8784 };
 
+/* Interval selected in the every-mode dropdown, in minutes */
+function everySelMinutes() {
+    return parseInt($("config-every-hours").value, 10) || 360;
+}
+
+function scheduleRunsPerDay() {
+    return $("sched-every").checked
+        ? Math.max(1, Math.round(1440 / everySelMinutes()))
+        : Math.max(1, modalTimes.length);
+}
+
 /* Max backups the current schedule can create per calendar bucket of `unit`
  * (day and coarser — the hour unit has its own literal check below) */
 function scheduleMaxPer(unit) {
-    const every = $("sched-every").checked;
-    const n = parseInt($("config-every-hours").value, 10) || 6;
-    const runsPerDay = every ? Math.max(1, Math.round(24 / n)) : Math.max(1, modalTimes.length);
-    return runsPerDay * Math.ceil(TIER_UNIT_HOURS[unit] / 24);
+    return scheduleRunsPerDay() * Math.ceil(TIER_UNIT_HOURS[unit] / 24);
 }
 
 /* "Per hour" is read literally: how many backups is EVERY hour guaranteed
  * to get? 0 unless the schedule runs at least hourly. */
 function hourGuarantee() {
-    const every = $("sched-every").checked;
-    if (every)
-        return (parseInt($("config-every-hours").value, 10) || 6) === 1 ? 1 : 0;
+    if ($("sched-every").checked) {
+        const m = everySelMinutes();
+        return (m <= 60 && 60 % m === 0) ? 60 / m : 0;
+    }
     const perHour = {};
     modalTimes.forEach(t => {
         const h = t.split(":")[0];
@@ -960,9 +971,10 @@ function hourGuarantee() {
  * e.g. "2 times/day × 7 days = max 14 per week" */
 function tierWarnMsg(unit, cap) {
     const every = $("sched-every").checked;
-    const n = parseInt($("config-every-hours").value, 10) || 6;
-    const runs = every ? Math.max(1, Math.round(24 / n)) : Math.max(1, modalTimes.length);
-    const src = every ? "every " + n + "h → " + runs + "/day"
+    const m = everySelMinutes();
+    const runs = scheduleRunsPerDay();
+    const lbl = m < 60 ? m + "min" : (m / 60) + "h";
+    const src = every ? "every " + lbl + " → " + runs + "/day"
                       : "the schedule above has " + runs + " time" +
                         (runs === 1 ? "" : "s") + "/day";
     if (unit === "hour") {
@@ -970,7 +982,7 @@ function tierWarnMsg(unit, cap) {
             return "Never reached: the schedule creates at most " + cap +
                 " backup" + (cap === 1 ? "" : "s") + " per hour.";
         return "Not hourly: " + src + ", so most hours get no backup — " +
-            "\"per hour\" needs the schedule to run every hour.";
+            "\"per hour\" needs the schedule to run at least every hour.";
     }
     if (unit === "day")
         return "Never reached: " + src + " → max " + cap + " per day.";
@@ -1074,9 +1086,7 @@ function addModalTier() {
  * a more generous "keep" is harmless, its buckets simply never fill. */
 function updateTierHint() {
     const hint = $("tier-d-hint");
-    const every = $("sched-every").checked;
-    const n = parseInt($("config-every-hours").value, 10) || 6;
-    const runs = every ? Math.max(1, Math.round(24 / n)) : Math.max(1, modalTimes.length);
+    const runs = scheduleRunsPerDay();
     hint.textContent = "The schedule produces up to " + runs + " backup" +
         (runs === 1 ? "" : "s") + " per day.";
     hint.hidden = !$("ret-tiered").checked;
@@ -1088,20 +1098,25 @@ function openConfigDialog(idx) {
     $("config-name").value = idx === -1 ? "" : (config.backups[idx].title || "");
     $("config-folder").value = idx === -1 ? "" : config.backups[idx].folder;
 
-    // Schedule: fixed daily times or an every-N-hours interval
-    const everyH = idx !== -1 ? (parseInt(config.backups[idx].every_hours, 10) || 0) : 0;
-    $("sched-every").checked = !!everyH;
-    $("sched-times").checked = !everyH;
+    // Schedule: fixed daily times or an interval (select values are minutes)
+    const b0 = idx !== -1 ? config.backups[idx] : null;
+    const everyMin = b0
+        ? (parseInt(b0.every_minutes, 10) || (parseInt(b0.every_hours, 10) || 0) * 60)
+        : 0;
+    $("sched-every").checked = !!everyMin;
+    $("sched-times").checked = !everyMin;
     const everySel = $("config-every-hours");
-    if (everyH) {
-        everySel.value = String(everyH);
-        if (everySel.value !== String(everyH)) {
+    if (everyMin) {
+        everySel.value = String(everyMin);
+        if (everySel.value !== String(everyMin)) {
             // Preserve a hand-edited interval that isn't among the presets
             const o = document.createElement("option");
-            o.value = String(everyH);
-            o.textContent = everyH + " hours";
+            o.value = String(everyMin);
+            o.textContent = everyMin < 60
+                ? everyMin + " minutes"
+                : (everyMin / 60) + (everyMin === 60 ? " hour" : " hours");
             everySel.appendChild(o);
-            everySel.value = String(everyH);
+            everySel.value = String(everyMin);
         }
     }
     modalTimes = idx === -1 ? [DEFAULT_TIME] : entryTimesList(config.backups[idx]).slice();
@@ -1116,7 +1131,7 @@ function openConfigDialog(idx) {
     if (!hasPol) {
         // Sensible default: keep as many per day as there are scheduled runs
         modalTiers = [
-            { keep: Math.max(1, everyH ? Math.round(24 / everyH) : modalTimes.length), per: "day", span: 7 },
+            { keep: Math.max(1, everyMin ? Math.round(1440 / everyMin) : modalTimes.length), per: "day", span: 7 },
             { keep: 1, per: "week", span: 4 },
             { keep: 1, per: "month", span: 12 }
         ];
@@ -1184,7 +1199,7 @@ function saveConfigEntry() {
         return;
     }
     const schedEvery = $("sched-every").checked;
-    const everyHours = Math.min(24, Math.max(1, parseInt($("config-every-hours").value, 10) || 6));
+    const everyMin = Math.min(1440, Math.max(30, parseInt($("config-every-hours").value, 10) || 360));
     if (!schedEvery && !modalTimes.length) {
         showConfigError("Add at least one backup time");
         return;
@@ -1215,13 +1230,20 @@ function saveConfigEntry() {
 
     const entry = editingIndex === -1 ? { folder } : { ...config.backups[editingIndex], folder };
     if (schedEvery) {
-        entry.every_hours = everyHours;
+        if (everyMin < 60) {
+            entry.every_minutes = everyMin;
+            delete entry.every_hours;
+        } else {
+            entry.every_hours = Math.round(everyMin / 60);
+            delete entry.every_minutes;
+        }
         delete entry.times;
     } else {
         entry.times = times;
         delete entry.every_hours;
+        delete entry.every_minutes;
     }
-    delete entry.time;                 // superseded by times[] / every_hours
+    delete entry.time;                 // superseded by times[] / every_*
     if (tiered) {
         entry.retention = policy;
         delete entry.retention_days;

@@ -1007,6 +1007,13 @@ for meta_path in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
         newest[folder] = m
 
 def entry_times(b):
+    # "every_minutes": M sub-hour runs (any divisor of 60), e.g. 30 → :00, :30
+    try:
+        m = int(b.get("every_minutes", 0))
+    except (TypeError, ValueError):
+        m = 0
+    if 1 <= m < 60 and 60 % m == 0:
+        return [(h, mi) for h in range(24) for mi in range(0, 60, m)]
     # "every_hours": N runs at 00:00, 0N:00, … — alternative to times[]
     try:
         n = int(b.get("every_hours", 0))
@@ -1075,6 +1082,16 @@ default = cfg.get("time", "02:00")
 times = set()
 for b in cfg.get("backups", []):
     if not b.get("enabled", True):
+        continue
+    # "every_minutes": M sub-hour runs (any divisor of 60), e.g. 30 → :00, :30
+    try:
+        m = int(b.get("every_minutes", 0))
+    except (TypeError, ValueError):
+        m = 0
+    if 1 <= m < 60 and 60 % m == 0:
+        for h in range(24):
+            for mi in range(0, 60, m):
+                times.add("%02d:%02d" % (h, mi))
         continue
     # "every_hours": N runs at 00:00, 0N:00, … — alternative to times[]
     try:
