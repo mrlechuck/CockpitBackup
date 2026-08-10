@@ -88,7 +88,7 @@ Each backup can have **several daily times** (e.g. 02:00 and 14:00) or run
 "keep the newest K backups per calendar period, looking back S periods from now":
 
 ```json
-"every_hours": 3,
+"every_hours": 1,
 "retention": [
     { "keep": 1, "per": "hour",  "span": 24 },
     { "keep": 1, "per": "day",   "span": 7 },

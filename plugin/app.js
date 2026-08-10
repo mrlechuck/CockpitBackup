@@ -18,7 +18,7 @@ if (typeof cockpit === "undefined") {
                   endpoint: "", access_key: "AKIAEXAMPLE", secret_key: "supersecret" },
             backups: [
                 { folder: "/etc", time: "02:00", retention_days: 30, enabled: true, title: "System configuration", s3: true },
-                { folder: "/home/roberto/documents", every_hours: 3, enabled: true,
+                { folder: "/home/roberto/documents", every_hours: 1, enabled: true,
                   retention: [{ keep: 1, per: "hour", span: 24 }, { keep: 1, per: "day", span: 7 },
                               { keep: 1, per: "week", span: 4 }, { keep: 1, per: "month", span: 12 }] },
                 { folder: "/var/www", time: "03:00", enabled: false, excludes: ["cache", "*.log"], title: "Web sites", mode: "incremental", full_every: 7,
@@ -930,36 +930,48 @@ function updateRetentionPanels() {
  * month, 366-day year: conservative, so we only flag sure cases) */
 const TIER_UNIT_HOURS = { hour: 1, day: 24, week: 168, month: 744, year: 8784 };
 
-/* Max backups the current schedule can create per calendar bucket of `unit` */
+/* Max backups the current schedule can create per calendar bucket of `unit`
+ * (day and coarser — the hour unit has its own literal check below) */
 function scheduleMaxPer(unit) {
     const every = $("sched-every").checked;
-    if (unit === "hour") {
-        if (every) return 1;                     // runs are at :00, one per hour slot
-        const perHour = {};
-        modalTimes.forEach(t => {
-            const h = t.split(":")[0];
-            perHour[h] = (perHour[h] || 0) + 1;
-        });
-        return Math.max(1, ...Object.values(perHour), 0);
-    }
     const n = parseInt($("config-every-hours").value, 10) || 6;
     const runsPerDay = every ? Math.max(1, Math.round(24 / n)) : Math.max(1, modalTimes.length);
     return runsPerDay * Math.ceil(TIER_UNIT_HOURS[unit] / 24);
 }
 
+/* "Per hour" is read literally: how many backups is EVERY hour guaranteed
+ * to get? 0 unless the schedule runs at least hourly. */
+function hourGuarantee() {
+    const every = $("sched-every").checked;
+    if (every)
+        return (parseInt($("config-every-hours").value, 10) || 6) === 1 ? 1 : 0;
+    const perHour = {};
+    modalTimes.forEach(t => {
+        const h = t.split(":")[0];
+        perHour[h] = (perHour[h] || 0) + 1;
+    });
+    let min = Infinity;
+    for (let h = 0; h < 24; h++)
+        min = Math.min(min, perHour[String(h).padStart(2, "0")] || 0);
+    return min;
+}
+
 /* Why a keep can never be reached, spelling out the schedule math —
  * e.g. "2 times/day × 7 days = max 14 per week" */
 function tierWarnMsg(unit, cap) {
-    if (unit === "hour")
-        return "Never reached: the schedule never runs more than " + cap +
-            " time" + (cap === 1 ? "" : "s") + " in the same hour → max " +
-            cap + " per hour.";
     const every = $("sched-every").checked;
     const n = parseInt($("config-every-hours").value, 10) || 6;
     const runs = every ? Math.max(1, Math.round(24 / n)) : Math.max(1, modalTimes.length);
     const src = every ? "every " + n + "h → " + runs + "/day"
                       : "the schedule above has " + runs + " time" +
                         (runs === 1 ? "" : "s") + "/day";
+    if (unit === "hour") {
+        if (cap >= 1)
+            return "Never reached: the schedule creates at most " + cap +
+                " backup" + (cap === 1 ? "" : "s") + " per hour.";
+        return "Not hourly: " + src + ", so most hours get no backup — " +
+            "\"per hour\" needs the schedule to run every hour.";
+    }
     if (unit === "day")
         return "Never reached: " + src + " → max " + cap + " per day.";
     const days = Math.ceil(TIER_UNIT_HOURS[unit] / 24);
@@ -983,8 +995,9 @@ function renderTierList() {
     };
     modalTiers.forEach((t, i) => {
         // A keep larger than what the schedule can create per period is
-        // never reached — the rule just keeps everything in its window
-        const cap = scheduleMaxPer(t.per);
+        // never reached; "per hour" is read literally — every hour must
+        // actually get a backup, or the rule is flagged
+        const cap = t.per === "hour" ? hourGuarantee() : scheduleMaxPer(t.per);
         cell("span", "tier-word", i === 0 ? "keep" : "and");
         // Inputs can't carry the ::after custom tooltip — wrap them
         const keepWrap = cell("span", "tier-keep-wrap");

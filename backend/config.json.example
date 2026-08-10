@@ -11,7 +11,7 @@
         "secret_key": ""
     },
     "backups": [
-        { "folder": "/etc", "every_hours": 3,
+        { "folder": "/etc", "every_hours": 1,
           "retention": [
               { "keep": 1, "per": "hour",  "span": 24 },
               { "keep": 1, "per": "day",   "span": 7 },
