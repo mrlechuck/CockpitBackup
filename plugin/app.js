@@ -927,8 +927,20 @@ function updateRetentionPanels() {
     updateTierHint();
 }
 
+/* Mirrors the backend's UNIT_SECONDS (month ≈ 30 days, year ≈ 365) */
+const TIER_UNIT_SECONDS = { hour: 3600, day: 86400, week: 7 * 86400,
+                            month: 30 * 86400, year: 365 * 86400 };
+
+function fmtAge(sec) {
+    if (sec % 86400 === 0 || sec > 2 * 86400)
+        return Math.round(sec / 86400) + "d";
+    return Math.round(sec / 3600) + "h";
+}
+
 /* Rows are kept in canonical order (finest unit first, larger keep first);
- * a unit or keep change re-sorts, so no manual reordering is ever needed. */
+ * a unit or keep change re-sorts, so no manual reordering is ever needed.
+ * Each row shows the age range its window actually covers — windows queue
+ * up one after another, they never overlap. */
 function renderTierList() {
     modalTiers = sortTiers(modalTiers);
     const list = $("tier-list");
@@ -940,7 +952,10 @@ function renderTierList() {
         list.appendChild(el);
         return el;
     };
+    let cumul = 0;
     modalTiers.forEach((t, i) => {
+        const start = cumul;
+        cumul += t.span * TIER_UNIT_SECONDS[t.per];
         cell("span", "tier-word", i === 0 ? "keep" : "then");
         const keep = cell("input");
         keep.type = "number";
@@ -974,6 +989,11 @@ function renderTierList() {
         });
         span.addEventListener("change", renderTierList);
         cell("span", "tier-word", t.span === 1 ? t.per : TIER_PLURAL[t.per]);
+        const from = fmtAge(start), to = fmtAge(cumul);
+        const range = cell("span", "tier-range muted",
+            start === 0 ? "≤ " + to
+                        : (from.slice(-1) === to.slice(-1) ? from.slice(0, -1) : from) + "–" + to);
+        range.title = "Applies to backups " + (start === 0 ? "up to " + to : from + " to " + to) + " old";
         const rm = cell("button", "tier-remove", "✕");
         rm.setAttribute("aria-label", "Remove tier");
         rm.addEventListener("click", () => {

@@ -1095,14 +1095,19 @@ select { cursor: pointer; }
 .retention-panel { margin-top: 0.6rem; }
 .tier-list {
     display: grid;
-    grid-template-columns: auto 64px auto auto auto 64px auto auto;
-    gap: 0.5rem 0.6rem;
+    grid-template-columns: auto 58px auto auto auto 58px auto auto auto;
+    gap: 0.5rem 0.45rem;
     align-items: center;
     font-size: 13.5px;
-    width: fit-content;
+    max-width: 100%;
     margin-bottom: 0.6rem;
 }
-.tier-list input[type="number"] { width: 64px; text-align: right; }
+.tier-range {
+    font-size: 12px;
+    white-space: nowrap;
+    justify-self: end;
+}
+.tier-list input[type="number"] { width: 58px; text-align: right; }
 .tier-list select { width: auto; }
 .tier-word { font-weight: 600; }
 .tier-for { color: var(--text-muted); justify-self: center; }
