@@ -742,8 +742,10 @@ retentions = {b["folder"]: int(b.get("retention_days", default_ret))
               for b in cfg.get("backups", [])}
 # Tiered (GFS) retention policies, e.g. keep 2/day for 7 days, then 1/week for
 # 4 weeks, then 1/month for 12 months. Folders without one keep the flat rule.
+# Two shapes: legacy dict {daily:{keep,days},…} and the list form
+# [{keep, per, span}, …] with per ∈ hour|day|week|month|year.
 policies = {b["folder"]: b["retention"] for b in cfg.get("backups", [])
-            if isinstance(b.get("retention"), dict)}
+            if isinstance(b.get("retention"), (dict, list))}
 now = time.time()
 
 def read_meta(path):
@@ -775,45 +777,80 @@ for mp in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
 # chain (classic full mode, legacy) are units of one.
 #
 # Flat rule (retention_days): the unit expires once older than N days.
-# Tiered rule (retention policy): grandfather-father-son selection — keep the
-# newest K units per calendar day within the daily window, then K per ISO week,
-# then K per calendar month; everything else goes. The newest unit of a folder
-# is always kept as a safety net. Remote members are printed as
-# "RemoteExpired:" for the shell to delete on S3.
+# Tiered rule (retention policy): an ordered list of tiers (keep, unit, span) —
+# keep at most `keep` units per calendar bucket of `unit` (hour, day, ISO week,
+# month, year) inside that tier's window; windows stack, each starting where
+# the previous one ends. Tiers apply in canonical order: finest unit first,
+# larger keep first within the same unit, so e.g. 6/day×1 precedes 1/day×7.
+# The newest unit of a folder is always kept as a safety net. Remote members
+# are printed as "RemoteExpired:" for the shell to delete on S3.
 import datetime as _dt
 
+UNIT_SECONDS = {"hour": 3600, "day": 86400, "week": 7 * 86400,
+                "month": 30 * 86400, "year": 365 * 86400}
+UNIT_ORDER = {"hour": 0, "day": 1, "week": 2, "month": 3, "year": 4}
+
+def norm_policy(pol):
+    # Either shape → canonical [(keep, unit, span), …]; malformed tiers dropped
+    tiers = []
+    if isinstance(pol, dict):
+        for k, unit, span_key in (("daily", "day", "days"),
+                                  ("weekly", "week", "weeks"),
+                                  ("monthly", "month", "months"),
+                                  ("yearly", "year", "years")):
+            t = pol.get(k) or {}
+            try:
+                keep, span = int(t.get("keep", 0)), int(t.get(span_key, 0))
+            except (TypeError, ValueError):
+                continue
+            if keep > 0 and span > 0:
+                tiers.append((keep, unit, span))
+    elif isinstance(pol, list):
+        for t in pol:
+            if not isinstance(t, dict):
+                continue
+            try:
+                keep, span = int(t.get("keep", 0)), int(t.get("span", 0))
+            except (TypeError, ValueError):
+                continue
+            unit = t.get("per")
+            if unit in UNIT_SECONDS and keep > 0 and span > 0:
+                tiers.append((keep, unit, span))
+    tiers.sort(key=lambda t: (UNIT_ORDER[t[1]], -t[0]))
+    return tiers
+
+def bucket_id(unit, t):
+    if unit == "hour":
+        return (t.date().isoformat(), t.hour)
+    if unit == "day":
+        return t.date().isoformat()
+    if unit == "week":
+        iso = t.isocalendar()
+        return (iso[0], iso[1])
+    if unit == "month":
+        return (t.year, t.month)
+    return t.year
+
 def gfs_keep(units, pol):
-    d = pol.get("daily") or {}
-    w = pol.get("weekly") or {}
-    m = pol.get("monthly") or {}
-    y = pol.get("yearly") or {}
-    d_keep, d_days = int(d.get("keep", 0)), int(d.get("days", 0))
-    w_keep, w_weeks = int(w.get("keep", 0)), int(w.get("weeks", 0))
-    m_keep, m_months = int(m.get("keep", 0)), int(m.get("months", 0))
-    y_keep, y_years = int(y.get("keep", 0)), int(y.get("years", 0))
-    b1 = d_days * 86400
-    b2 = b1 + w_weeks * 7 * 86400
-    b3 = b2 + m_months * 30 * 86400
-    b4 = b3 + y_years * 365 * 86400
+    tiers = norm_policy(pol)
+    bounds, b = [], 0
+    for keep, unit, span in tiers:
+        b += span * UNIT_SECONDS[unit]
+        bounds.append(b)
     counts = {}
     kept = set()
     for newest_ts, key in sorted(units, reverse=True):   # newest first
         age = now - newest_ts
         t = _dt.datetime.fromtimestamp(newest_ts)
-        if age <= b1 and d_keep:
-            bucket, cap = ("d", t.date().isoformat()), d_keep
-        elif age <= b2 and w_keep:
-            iso = t.isocalendar()
-            bucket, cap = ("w", iso[0], iso[1]), w_keep
-        elif age <= b3 and m_keep:
-            bucket, cap = ("m", t.year, t.month), m_keep
-        elif age <= b4 and y_keep:
-            bucket, cap = ("y", t.year), y_keep
-        else:
-            continue
-        if counts.get(bucket, 0) < cap:
-            counts[bucket] = counts.get(bucket, 0) + 1
-            kept.add(key)
+        for i, (keep, unit, span) in enumerate(tiers):
+            if age <= bounds[i]:
+                # Tier index in the bucket key keeps counters separate when
+                # two consecutive tiers share the same unit (6/day then 1/day)
+                bucket = (i, bucket_id(unit, t))
+                if counts.get(bucket, 0) < keep:
+                    counts[bucket] = counts.get(bucket, 0) + 1
+                    kept.add(key)
+                break
     return kept
 
 groups = {}
@@ -977,6 +1014,13 @@ for meta_path in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
         newest[folder] = m
 
 def entry_times(b):
+    # "every_hours": N runs at 00:00, 0N:00, … — alternative to times[]
+    try:
+        n = int(b.get("every_hours", 0))
+    except (TypeError, ValueError):
+        n = 0
+    if 1 <= n <= 24:
+        return [(h, 0) for h in range(0, 24, n)]
     ts = b.get("times") or [b.get("time") or default_time]
     parsed = []
     for t in ts:
@@ -1038,6 +1082,15 @@ default = cfg.get("time", "02:00")
 times = set()
 for b in cfg.get("backups", []):
     if not b.get("enabled", True):
+        continue
+    # "every_hours": N runs at 00:00, 0N:00, … — alternative to times[]
+    try:
+        n = int(b.get("every_hours", 0))
+    except (TypeError, ValueError):
+        n = 0
+    if 1 <= n <= 24:
+        for h in range(0, 24, n):
+            times.add("%02d:00" % h)
         continue
     for t in (b.get("times") or [b.get("time") or default]):
         try:

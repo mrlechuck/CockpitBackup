@@ -11,11 +11,19 @@
         "secret_key": ""
     },
     "backups": [
-        { "folder": "/etc", "times": ["02:00", "14:00"],
+        { "folder": "/etc", "every_hours": 3,
+          "retention": [
+              { "keep": 1, "per": "hour",  "span": 24 },
+              { "keep": 6, "per": "day",   "span": 1 },
+              { "keep": 1, "per": "day",   "span": 7 },
+              { "keep": 1, "per": "week",  "span": 4 },
+              { "keep": 1, "per": "month", "span": 12 }
+          ],
+          "title": "System configuration" },
+        { "folder": "/home/user/documents", "times": ["02:00", "14:00"],
           "retention": { "daily": { "keep": 2, "days": 7 },
                          "weekly": { "keep": 1, "weeks": 4 },
-                         "monthly": { "keep": 1, "months": 12 } },
-          "title": "System configuration" },
+                         "monthly": { "keep": 1, "months": 12 } } },
         { "folder": "/var/www", "time": "03:30", "retention_days": 14,
           "excludes": ["cache", "logs/tmp", "*.log"], "title": "Web sites",
           "mode": "incremental", "full_every": 7 }

@@ -82,29 +82,41 @@ access" button at the top).
 
 ### Multiple runs per day and tiered (GFS) retention
 
-Each backup can have **several daily times** (e.g. 02:00 and 14:00) and, instead of
-the flat "keep N days", a **tiered grandfather-father-son policy**:
+Each backup can have **several daily times** (e.g. 02:00 and 14:00) or run
+**every N hours** (`"every_hours": 3` → 00:00, 03:00, …) and, instead of the flat
+"keep N days", a **tiered thinning policy**: an ordered list of tiers, each
+"keep up to K backups per calendar period, for a window of S periods":
 
 ```json
-"times": ["02:00", "14:00"],
-"retention": {
-    "daily":   { "keep": 2, "days": 7 },
-    "weekly":  { "keep": 1, "weeks": 4 },
-    "monthly": { "keep": 1, "months": 12 }
-}
+"every_hours": 3,
+"retention": [
+    { "keep": 1, "per": "hour",  "span": 24 },
+    { "keep": 6, "per": "day",   "span": 1 },
+    { "keep": 1, "per": "day",   "span": 7 },
+    { "keep": 1, "per": "week",  "span": 4 },
+    { "keep": 1, "per": "month", "span": 12 }
+]
 ```
 
-Reading: keep up to 2 backups per day for the last 7 days, then 1 per ISO week for
-4 more weeks, then 1 per calendar month for 12 more months; anything older is
-deleted. The newest of each period wins, incremental chains are kept or dropped as
-a whole, and a folder's most recent backup is never deleted. Entries with
-`retention_days` keep the old flat behavior.
+Reading: for the last 24 hours keep 1 backup per hour, for the next day back keep
+6, then 1 per day for 7 more days, 1 per ISO week for 4 more weeks, 1 per calendar
+month for 12 more months; anything older is deleted. `per` is one of
+`hour|day|week|month|year`. Windows stack: each tier starts where the previous one
+ends. Tiers are applied in canonical order — finest period first and, within the
+same period, larger `keep` first — so their order in the file doesn't matter.
+The newest of each period wins (never a random pick), incremental chains are kept
+or dropped as a whole, and a folder's most recent backup is never deleted.
+
+Backward compatible: the older dict form
+(`"retention": { "daily": { "keep": 2, "days": 7 }, … }`) and flat
+`retention_days` entries keep working unchanged.
 
 ### Per-folder scheduling
 
 The systemd timer fires **exactly at the configured times**: `apply-schedule`
-generates one `OnCalendar` entry per distinct backup time (enabled folders only)
-and the UI regenerates them automatically after every configuration change.
+generates one `OnCalendar` entry per distinct backup time (enabled folders only,
+`every_hours` entries contribute their hourly slots) and the UI regenerates them
+automatically after every configuration change.
 Each firing runs `backup-due`, which backs up the folders whose daily time has
 passed and whose newest archive is older than that scheduled moment. This means:
 

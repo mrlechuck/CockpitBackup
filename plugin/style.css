@@ -1091,30 +1091,36 @@ select { cursor: pointer; }
 }
 .ret-mode input { accent-color: var(--primary); }
 
-/* Tiered retention: aligned grid — checkbox | keep | unit | for | span | unit */
+/* Tiered retention: dynamic rows — keep [n] per [unit] for [n] [unit] [×] */
 .retention-panel { margin-top: 0.6rem; }
-.tier-grid {
+.tier-list {
     display: grid;
-    grid-template-columns: auto 64px auto auto 64px auto;
+    grid-template-columns: auto 64px auto auto auto 64px auto auto;
     gap: 0.5rem 0.6rem;
     align-items: center;
     font-size: 13.5px;
     width: fit-content;
+    margin-bottom: 0.6rem;
 }
-.tier-grid input[type="number"] { width: 64px; text-align: right; }
-.tier-check {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-weight: 600;
-}
-.tier-check input { accent-color: var(--primary); }
+.tier-list input[type="number"] { width: 64px; text-align: right; }
+.tier-list select { width: auto; }
+.tier-word { font-weight: 600; }
 .tier-for { color: var(--text-muted); justify-self: center; }
+.tier-remove {
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0.1rem 0.3rem;
+    border-radius: 50%;
+    line-height: 1;
+}
+.tier-remove:hover { color: var(--danger); }
 .tier-hint {
     color: var(--text-muted);
     margin: 0.5rem 0 0.4rem;
 }
-.tier-cell-off { opacity: 0.4; }
 @keyframes modal-in {
     from { opacity: 0; transform: translateY(8px) scale(0.98); }
     to { opacity: 1; transform: none; }

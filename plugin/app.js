@@ -18,10 +18,13 @@ if (typeof cockpit === "undefined") {
                   endpoint: "", access_key: "AKIAEXAMPLE", secret_key: "supersecret" },
             backups: [
                 { folder: "/etc", time: "02:00", retention_days: 30, enabled: true, title: "System configuration", s3: true },
-                { folder: "/home/roberto/documents", times: ["01:30", "13:30"], enabled: true,
+                { folder: "/home/roberto/documents", every_hours: 3, enabled: true,
+                  retention: [{ keep: 1, per: "hour", span: 24 }, { keep: 6, per: "day", span: 1 },
+                              { keep: 1, per: "day", span: 7 }, { keep: 1, per: "week", span: 4 },
+                              { keep: 1, per: "month", span: 12 }] },
+                { folder: "/var/www", time: "03:00", enabled: false, excludes: ["cache", "*.log"], title: "Web sites", mode: "incremental", full_every: 7,
                   retention: { daily: { keep: 2, days: 7 }, weekly: { keep: 1, weeks: 4 },
-                               monthly: { keep: 1, months: 12 }, yearly: { keep: 1, years: 5 } } },
-                { folder: "/var/www", time: "03:00", retention_days: 30, enabled: false, excludes: ["cache", "*.log"], title: "Web sites", mode: "incremental", full_every: 7 }
+                               monthly: { keep: 1, months: 12 }, yearly: { keep: 1, years: 5 } } }
             ]
         };
         const now = Math.floor(Date.now() / 1000);
@@ -194,15 +197,48 @@ function entryTimesList(b) {
 }
 function entryTime(b) { return entryTimesList(b)[0]; }
 
-/* Human summary of an entry's retention: flat days or tiered GFS policy */
+/* Retention tiers: canonical order is finest unit first, larger keep first
+ * within the same unit — mirrors the backend's norm_policy() */
+const TIER_UNIT_ORDER = { hour: 0, day: 1, week: 2, month: 3, year: 4 };
+const TIER_PLURAL = { hour: "hours", day: "days", week: "weeks", month: "months", year: "years" };
+const TIER_ABBR = { hour: "h", day: "d", week: "w", month: "m", year: "y" };
+const TIER_DEFAULT_SPAN = { hour: 24, day: 7, week: 4, month: 12, year: 3 };
+const MAX_TIERS = 8;
+
+function sortTiers(tiers) {
+    return tiers.slice().sort((a, b) =>
+        (TIER_UNIT_ORDER[a.per] - TIER_UNIT_ORDER[b.per]) || (b.keep - a.keep));
+}
+
+/* Either policy shape → canonical [{keep, per, span}, …]; malformed tiers dropped */
+function tiersFromPolicy(pol) {
+    const tiers = [];
+    const push = (keep, per, span) => {
+        keep = parseInt(keep, 10);
+        span = parseInt(span, 10);
+        if (keep >= 1 && span >= 1)
+            tiers.push({ keep, per, span });
+    };
+    if (Array.isArray(pol)) {
+        pol.forEach(t => {
+            if (t && TIER_UNIT_ORDER[t.per] !== undefined)
+                push(t.keep, t.per, t.span);
+        });
+    } else if (pol && typeof pol === "object") {
+        [["daily", "day", "days"], ["weekly", "week", "weeks"],
+         ["monthly", "month", "months"], ["yearly", "year", "years"]].forEach(([k, per, spanKey]) => {
+            if (pol[k]) push(pol[k].keep, per, pol[k][spanKey]);
+        });
+    }
+    return sortTiers(tiers);
+}
+
+/* Human summary of an entry's retention: flat days or tiered policy */
 function retentionLabel(b) {
     const pol = b.retention;
     if (pol && typeof pol === "object") {
-        const parts = [];
-        if (pol.daily) parts.push(pol.daily.keep + "/day for " + pol.daily.days + "d");
-        if (pol.weekly) parts.push(pol.weekly.keep + "/week for " + pol.weekly.weeks + "w");
-        if (pol.monthly) parts.push(pol.monthly.keep + "/month for " + pol.monthly.months + "m");
-        if (pol.yearly) parts.push(pol.yearly.keep + "/year for " + pol.yearly.years + "y");
+        const parts = tiersFromPolicy(pol).map(t =>
+            t.keep + "/" + t.per + " for " + t.span + TIER_ABBR[t.per]);
         return "tiered: " + parts.join(", ");
     }
     return "keeps " + (b.retention_days || config.retention_days) + " days";
@@ -575,7 +611,9 @@ function configRow(b, idx) {
     const parts = [];
     parts.push(b.enabled === false
         ? "automatic backup off"
-        : "daily at " + entryTimesList(b).join(" + "));
+        : (b.every_hours
+            ? "every " + b.every_hours + "h"
+            : "daily at " + entryTimesList(b).join(" + ")));
     parts.push(retentionLabel(b));
     if (b.excludes && b.excludes.length)
         parts.push(b.excludes.length === 1 ? "1 exclusion" : b.excludes.length + " exclusions");
@@ -873,55 +911,111 @@ function addModalTime() {
     renderTimesList();
 }
 
-function setTier(t, tier, defKeep, defSpan, spanKey) {
-    $("tier-" + t + "-on").checked = !!tier;
-    $("tier-" + t + "-keep").value = (tier && tier.keep) || defKeep;
-    $("tier-" + t + "-span").value = (tier && tier[spanKey]) || defSpan;
+let modalTiers = [];
+
+function updateSchedulePanels() {
+    const every = $("sched-every").checked;
+    $("schedule-times").hidden = every;
+    $("schedule-every").hidden = !every;
+    updateTierHint();
 }
 
 function updateRetentionPanels() {
     const tiered = $("ret-tiered").checked;
     $("retention-simple").hidden = tiered;
     $("retention-tiered").hidden = !tiered;
-    updateTierCascade();
-}
-
-/* Tiers form a chain: weekly needs daily, monthly needs weekly, yearly needs
- * monthly. Turning a tier off turns off and locks everything below it. */
-function updateTierCascade() {
-    const order = ["d", "w", "m", "y"];
-    let parentOn = true;
-    order.forEach(t => {
-        const box = $("tier-" + t + "-on");
-        if (!parentOn)
-            box.checked = false;
-        box.disabled = !parentOn;
-        const on = box.checked;
-        $("tier-" + t + "-keep").disabled = !on;
-        $("tier-" + t + "-span").disabled = !on;
-        // Dim the whole grid row (label + its 5 following cells) when disabled
-        const label = box.closest(".tier-check");
-        let cell = label;
-        for (let i = 0; i < 6 && cell; i++) {
-            cell.classList.toggle("tier-cell-off", !parentOn);
-            cell = cell.nextElementSibling;
-        }
-        parentOn = on;
-    });
     updateTierHint();
 }
 
-/* "Keep N/day" is hard-capped by the number of scheduled runs: the schedule
- * cannot produce more archives per day than it has times. */
+/* Rows are kept in canonical order (finest unit first, larger keep first);
+ * a unit or keep change re-sorts, so no manual reordering is ever needed. */
+function renderTierList() {
+    modalTiers = sortTiers(modalTiers);
+    const list = $("tier-list");
+    list.innerHTML = "";
+    const cell = (tag, cls, text) => {
+        const el = document.createElement(tag);
+        if (cls) el.className = cls;
+        if (text !== undefined) el.textContent = text;
+        list.appendChild(el);
+        return el;
+    };
+    modalTiers.forEach((t, i) => {
+        cell("span", "tier-word", i === 0 ? "keep" : "then");
+        const keep = cell("input");
+        keep.type = "number";
+        keep.min = 1; keep.max = 100;
+        keep.value = t.keep;
+        keep.addEventListener("input", () => {
+            t.keep = Math.min(100, Math.max(1, parseInt(keep.value, 10) || 1));
+        });
+        keep.addEventListener("change", renderTierList);
+        cell("span", "tier-for", "per");
+        const per = cell("select");
+        Object.keys(TIER_UNIT_ORDER).forEach(u => {
+            const o = document.createElement("option");
+            o.value = u;
+            o.textContent = u;
+            per.appendChild(o);
+        });
+        per.value = t.per;
+        per.addEventListener("change", () => {
+            t.per = per.value;
+            t.span = TIER_DEFAULT_SPAN[t.per];
+            renderTierList();
+        });
+        cell("span", "tier-for", "for");
+        const span = cell("input");
+        span.type = "number";
+        span.min = 1; span.max = 3650;
+        span.value = t.span;
+        span.addEventListener("input", () => {
+            t.span = Math.min(3650, Math.max(1, parseInt(span.value, 10) || 1));
+        });
+        span.addEventListener("change", renderTierList);
+        cell("span", "tier-word", t.span === 1 ? t.per : TIER_PLURAL[t.per]);
+        const rm = cell("button", "tier-remove", "✕");
+        rm.setAttribute("aria-label", "Remove tier");
+        rm.addEventListener("click", () => {
+            modalTiers.splice(i, 1);
+            renderTierList();
+        });
+    });
+    if (!modalTiers.length) {
+        const empty = document.createElement("span");
+        empty.className = "muted small";
+        empty.style.gridColumn = "1 / -1";
+        empty.textContent = "No tiers yet — add at least one.";
+        list.appendChild(empty);
+    }
+    $("tier-add").disabled = modalTiers.length >= MAX_TIERS;
+    updateTierHint();
+}
+
+function addModalTier() {
+    if (modalTiers.length >= MAX_TIERS)
+        return;
+    // Default to one unit coarser than the coarsest tier already present
+    const units = Object.keys(TIER_UNIT_ORDER);
+    let unit = "day";
+    if (modalTiers.length) {
+        const coarsest = Math.max(...modalTiers.map(t => TIER_UNIT_ORDER[t.per]));
+        unit = units[Math.min(coarsest + 1, units.length - 1)];
+    }
+    modalTiers.push({ keep: 1, per: unit, span: TIER_DEFAULT_SPAN[unit] });
+    renderTierList();
+}
+
+/* Informational only: the schedule caps how many backups per day can exist —
+ * a more generous "keep" is harmless, its buckets simply never fill. */
 function updateTierHint() {
-    const input = $("tier-d-keep");
     const hint = $("tier-d-hint");
-    const runs = Math.max(1, modalTimes.length);
-    input.max = runs;
-    if ((parseInt(input.value, 10) || 1) > runs)
-        input.value = runs;
-    hint.textContent = "Maximum " + runs + " per day — one for each scheduled run.";
-    hint.hidden = !($("ret-tiered").checked && $("tier-d-on").checked);
+    const every = $("sched-every").checked;
+    const n = parseInt($("config-every-hours").value, 10) || 6;
+    const runs = every ? Math.max(1, Math.round(24 / n)) : Math.max(1, modalTimes.length);
+    hint.textContent = "The schedule produces up to " + runs + " backup" +
+        (runs === 1 ? "" : "s") + " per day.";
+    hint.hidden = !$("ret-tiered").checked;
 }
 
 function openConfigDialog(idx) {
@@ -930,24 +1024,45 @@ function openConfigDialog(idx) {
     $("config-name").value = idx === -1 ? "" : (config.backups[idx].title || "");
     $("config-folder").value = idx === -1 ? "" : config.backups[idx].folder;
 
-    // Schedule: one or more daily times
+    // Schedule: fixed daily times or an every-N-hours interval
+    const everyH = idx !== -1 ? (parseInt(config.backups[idx].every_hours, 10) || 0) : 0;
+    $("sched-every").checked = !!everyH;
+    $("sched-times").checked = !everyH;
+    const everySel = $("config-every-hours");
+    if (everyH) {
+        everySel.value = String(everyH);
+        if (everySel.value !== String(everyH)) {
+            // Preserve a hand-edited interval that isn't among the presets
+            const o = document.createElement("option");
+            o.value = String(everyH);
+            o.textContent = everyH + " hours";
+            everySel.appendChild(o);
+            everySel.value = String(everyH);
+        }
+    }
     modalTimes = idx === -1 ? [DEFAULT_TIME] : entryTimesList(config.backups[idx]).slice();
     renderTimesList();
     $("config-new-time").value = DEFAULT_TIME;
+    updateSchedulePanels();
 
-    // Retention: simple day-count or tiered (GFS) policy
+    // Retention: simple day-count or tiered policy (list or legacy dict)
     const pol = idx !== -1 ? config.backups[idx].retention : null;
-    const hasPol = !!(pol && typeof pol === "object");
+    modalTiers = tiersFromPolicy(pol);
+    const hasPol = modalTiers.length > 0;
+    if (!hasPol) {
+        // Sensible default: keep as many per day as there are scheduled runs
+        modalTiers = [
+            { keep: Math.max(1, everyH ? Math.round(24 / everyH) : modalTimes.length), per: "day", span: 7 },
+            { keep: 1, per: "week", span: 4 },
+            { keep: 1, per: "month", span: 12 }
+        ];
+    }
     $("ret-tiered").checked = hasPol;
     $("ret-simple").checked = !hasPol;
     $("config-retention").value = idx === -1
         ? config.retention_days
         : (config.backups[idx].retention_days || config.retention_days);
-    // Sensible daily default: keep as many per day as there are scheduled runs
-    setTier("d", hasPol ? pol.daily : { keep: modalTimes.length || 1, days: 7 }, 2, 7, "days");
-    setTier("w", hasPol ? pol.weekly : { keep: 1, weeks: 4 }, 1, 4, "weeks");
-    setTier("m", hasPol ? pol.monthly : { keep: 1, months: 12 }, 1, 12, "months");
-    setTier("y", hasPol ? pol.yearly : null, 1, 5, "years");
+    renderTierList();
     updateRetentionPanels();
 
     $("config-excludes").value = idx === -1
@@ -982,10 +1097,6 @@ function showConfigError(msg) {
     el.hidden = !msg;
 }
 
-function tierNum(id, def, max) {
-    return Math.min(max, Math.max(1, parseInt($(id).value, 10) || def));
-}
-
 function saveConfigEntry() {
     const title = $("config-name").value.trim();
     const folder = $("config-folder").value.trim().replace(/\/+$/, "") || $("config-folder").value.trim();
@@ -1008,7 +1119,9 @@ function saveConfigEntry() {
         showConfigError("This folder is already configured");
         return;
     }
-    if (!modalTimes.length) {
+    const schedEvery = $("sched-every").checked;
+    const everyHours = Math.min(24, Math.max(1, parseInt($("config-every-hours").value, 10) || 6));
+    if (!schedEvery && !modalTimes.length) {
         showConfigError("Add at least one backup time");
         return;
     }
@@ -1017,18 +1130,9 @@ function saveConfigEntry() {
     const tiered = $("ret-tiered").checked;
     let policy = null;
     if (tiered) {
-        policy = {};
-        if ($("tier-d-on").checked)
-            policy.daily = { keep: tierNum("tier-d-keep", 1, Math.max(1, times.length)),
-                             days: tierNum("tier-d-span", 7, 90) };
-        if ($("tier-w-on").checked)
-            policy.weekly = { keep: tierNum("tier-w-keep", 1, 7), weeks: tierNum("tier-w-span", 4, 52) };
-        if ($("tier-m-on").checked)
-            policy.monthly = { keep: tierNum("tier-m-keep", 1, 10), months: tierNum("tier-m-span", 12, 120) };
-        if ($("tier-y-on").checked)
-            policy.yearly = { keep: tierNum("tier-y-keep", 1, 12), years: tierNum("tier-y-span", 5, 100) };
-        if (!Object.keys(policy).length) {
-            showConfigError("Enable at least one retention tier");
+        policy = tiersFromPolicy(modalTiers).slice(0, MAX_TIERS);
+        if (!policy.length) {
+            showConfigError("Add at least one retention tier");
             return;
         }
     }
@@ -1038,8 +1142,14 @@ function saveConfigEntry() {
     const fullEvery = Math.max(1, parseInt($("config-full-every").value, 10) || 7);
 
     const entry = editingIndex === -1 ? { folder } : { ...config.backups[editingIndex], folder };
-    entry.times = times;
-    delete entry.time;                 // superseded by times[]
+    if (schedEvery) {
+        entry.every_hours = everyHours;
+        delete entry.times;
+    } else {
+        entry.times = times;
+        delete entry.every_hours;
+    }
+    delete entry.time;                 // superseded by times[] / every_hours
     if (tiered) {
         entry.retention = policy;
         delete entry.retention_days;
@@ -1580,11 +1690,12 @@ document.addEventListener("DOMContentLoaded", () => {
     $("config-mode").addEventListener("change", updateModeField);
     $("config-add-time").addEventListener("click", addModalTime);
     $("config-new-time").addEventListener("keydown", ev => { if (ev.key === "Enter") addModalTime(); });
+    $("sched-times").addEventListener("change", updateSchedulePanels);
+    $("sched-every").addEventListener("change", updateSchedulePanels);
+    $("config-every-hours").addEventListener("change", updateTierHint);
     $("ret-simple").addEventListener("change", updateRetentionPanels);
     $("ret-tiered").addEventListener("change", updateRetentionPanels);
-    $("tier-d-keep").addEventListener("input", updateTierHint);
-    ["d", "w", "m", "y"].forEach(t =>
-        $("tier-" + t + "-on").addEventListener("change", updateTierCascade));
+    $("tier-add").addEventListener("click", addModalTier);
     $("estimate-size").addEventListener("click", estimateSize);
     $("save-settings").addEventListener("click", saveSettings);
     $("save-s3").addEventListener("click", () => saveS3());

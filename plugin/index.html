@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=1.5.15">
+    <link rel="stylesheet" href="style.css?v=1.6.0">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -15,7 +15,7 @@
         <div id="view-list">
             <header class="page-header">
                 <div class="app-icon" aria-hidden="true">
-                    <img src="app-icon.svg?v=1.5.15" alt="" width="30" height="30">
+                    <img src="app-icon.svg?v=1.6.0" alt="" width="30" height="30">
                 </div>
                 <div>
                     <h1>Folder backup</h1>
@@ -290,7 +290,17 @@
                 </div>
 
                 <h3 class="modal-section-title">Schedule</h3>
-                <div class="field">
+                <div class="ret-modes">
+                    <label class="ret-mode">
+                        <input type="radio" name="schedule-mode" value="times" id="sched-times" checked>
+                        <span><strong>At fixed times</strong> — one or more runs per day</span>
+                    </label>
+                    <label class="ret-mode">
+                        <input type="radio" name="schedule-mode" value="every" id="sched-every">
+                        <span><strong>Every N hours</strong> — from midnight, around the clock</span>
+                    </label>
+                </div>
+                <div class="field" id="schedule-times">
                     <label class="field-label">Backup times</label>
                     <div id="times-list" class="times-list"></div>
                     <div class="input-row">
@@ -301,6 +311,19 @@
                         </button>
                     </div>
                     <p class="field-hint muted">One or more runs per day — 24-hour format, server's timezone.</p>
+                </div>
+                <div class="field" id="schedule-every" hidden>
+                    <label class="field-label" for="config-every-hours">Run every</label>
+                    <select id="config-every-hours">
+                        <option value="1">hour</option>
+                        <option value="2">2 hours</option>
+                        <option value="3">3 hours</option>
+                        <option value="4">4 hours</option>
+                        <option value="6" selected>6 hours</option>
+                        <option value="8">8 hours</option>
+                        <option value="12">12 hours</option>
+                    </select>
+                    <p class="field-hint muted">Runs at 00:00 and then every N hours — server's timezone.</p>
                 </div>
 
                 <h3 class="modal-section-title">Retention</h3>
@@ -321,39 +344,18 @@
                     </div>
                 </div>
                 <div id="retention-tiered" class="retention-panel" hidden>
-                    <div class="tier-grid">
-                        <label class="tier-check"><input type="checkbox" id="tier-d-on" checked> keep</label>
-                        <input type="number" id="tier-d-keep" min="1" max="24" value="2">
-                        <span class="tier-unit">per day</span>
-                        <span class="tier-for">for</span>
-                        <input type="number" id="tier-d-span" min="1" max="90" value="7">
-                        <span class="tier-unit">days</span>
-
-                        <label class="tier-check"><input type="checkbox" id="tier-w-on" checked> then</label>
-                        <input type="number" id="tier-w-keep" min="1" max="7" value="1">
-                        <span class="tier-unit">per week</span>
-                        <span class="tier-for">for</span>
-                        <input type="number" id="tier-w-span" min="1" max="52" value="4">
-                        <span class="tier-unit">weeks</span>
-
-                        <label class="tier-check"><input type="checkbox" id="tier-m-on" checked> then</label>
-                        <input type="number" id="tier-m-keep" min="1" max="10" value="1">
-                        <span class="tier-unit">per month</span>
-                        <span class="tier-for">for</span>
-                        <input type="number" id="tier-m-span" min="1" max="120" value="12">
-                        <span class="tier-unit">months</span>
-
-                        <label class="tier-check"><input type="checkbox" id="tier-y-on"> then</label>
-                        <input type="number" id="tier-y-keep" min="1" max="12" value="1">
-                        <span class="tier-unit">per year</span>
-                        <span class="tier-for">for</span>
-                        <input type="number" id="tier-y-span" min="1" max="100" value="5">
-                        <span class="tier-unit">years</span>
+                    <div id="tier-list" class="tier-list"></div>
+                    <div class="input-row">
+                        <button id="tier-add" class="btn">
+                            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 2a.75.75 0 0 1 .75.75v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5A.75.75 0 0 1 8 2Z"/></svg>
+                            Add tier
+                        </button>
                     </div>
                     <p id="tier-d-hint" class="field-hint tier-hint" hidden></p>
-                    <p class="field-hint muted">Keeps the newest backup of each period and deletes the
-                        rest; anything past the last tier is removed. Incremental chains are kept or
-                        dropped as a whole.</p>
+                    <p class="field-hint muted">Tiers apply from the finest period to the coarsest, each
+                        window starting where the previous one ends. Within each period the newest
+                        backups survive (up to "keep"); anything past the last tier is removed.
+                        Incremental chains count as one backup and are kept or dropped as a whole.</p>
                 </div>
 
                 <h3 class="modal-section-title">Exclusions</h3>
@@ -472,6 +474,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=1.5.15"></script>
+    <script src="app.js?v=1.6.0"></script>
 </body>
 </html>
