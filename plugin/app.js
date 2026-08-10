@@ -989,13 +989,16 @@ function renderTierList() {
             }
         }
         cell("span", "tier-word", i === 0 ? "keep" : "then");
-        const keep = cell("input");
+        // Inputs can't carry the ::after custom tooltip — wrap them
+        const keepWrap = cell("span", "tier-keep-wrap");
+        const keep = document.createElement("input");
+        keepWrap.appendChild(keep);
         keep.type = "number";
         keep.min = 1; keep.max = 100;
         keep.value = t.keep;
         if (t.keep > cap) {
             keep.classList.add("tier-warn");
-            keep.title = "Never reached: " + capSrc + " " + cap + " backup" +
+            keepWrap.dataset.tooltip = "Never reached: " + capSrc + " " + cap + " backup" +
                 (cap === 1 ? "" : "s") + " per " + t.per +
                 " — this tier keeps everything in its window.";
         }
@@ -1031,7 +1034,7 @@ function renderTierList() {
         const range = cell("span", "tier-range muted",
             start === 0 ? "≤ " + to
                         : (from.slice(-1) === to.slice(-1) ? from.slice(0, -1) : from) + "–" + to);
-        range.title = start === 0
+        range.dataset.tooltip = start === 0
             ? "This tier applies to backups up to " + to + " old."
             : "This tier applies to backups between " + from + " and " + to +
               " old — each window starts where the one above ends.";

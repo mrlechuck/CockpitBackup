@@ -1111,10 +1111,17 @@ select { cursor: pointer; }
     text-underline-offset: 3px;
 }
 /* A "keep" that can never be reached (schedule or a tier above lets fewer through) */
+.tier-keep-wrap { display: inline-flex; }
 .tier-list input.tier-warn {
     border-color: var(--warning);
     box-shadow: 0 0 0 1px var(--warning) inset;
 }
+/* Anchor tier tooltips to the element's edge, not centered: near the modal
+ * margins a centered bubble would be clipped */
+.tier-keep-wrap[data-tooltip]::after { left: 0; transform: translateY(3px); }
+.tier-keep-wrap[data-tooltip]:hover::after { transform: translateY(0); }
+.tier-range[data-tooltip]::after { left: auto; right: 0; transform: translateY(3px); }
+.tier-range[data-tooltip]:hover::after { transform: translateY(0); }
 .tier-list input[type="number"] { width: 58px; text-align: right; }
 .tier-list select { width: auto; }
 .tier-word { font-weight: 600; }
