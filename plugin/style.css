@@ -1095,20 +1095,12 @@ select { cursor: pointer; }
 .retention-panel { margin-top: 0.6rem; }
 .tier-list {
     display: grid;
-    grid-template-columns: auto 58px auto auto auto 58px auto auto auto;
+    grid-template-columns: auto 58px auto auto auto 58px auto auto;
     gap: 0.5rem 0.45rem;
     align-items: center;
     font-size: 13.5px;
     max-width: 100%;
     margin-bottom: 0.6rem;
-}
-.tier-range {
-    font-size: 12px;
-    white-space: nowrap;
-    justify-self: end;
-    cursor: help;
-    text-decoration: underline dotted;
-    text-underline-offset: 3px;
 }
 /* A "keep" that can never be reached (schedule or a tier above lets fewer through) */
 .tier-keep-wrap { display: inline-flex; }
@@ -1120,8 +1112,6 @@ select { cursor: pointer; }
  * margins a centered bubble would be clipped */
 .tier-keep-wrap[data-tooltip]::after { left: 0; transform: translateY(3px); }
 .tier-keep-wrap[data-tooltip]:hover::after { transform: translateY(0); }
-.tier-range[data-tooltip]::after { left: auto; right: 0; transform: translateY(3px); }
-.tier-range[data-tooltip]:hover::after { transform: translateY(0); }
 .tier-list input[type="number"] { width: 58px; text-align: right; }
 .tier-list select { width: auto; }
 .tier-word { font-weight: 600; }

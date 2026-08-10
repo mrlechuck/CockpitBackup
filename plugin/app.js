@@ -947,6 +947,26 @@ function scheduleMaxPer(unit) {
     return runsPerDay * Math.ceil(TIER_UNIT_HOURS[unit] / 24);
 }
 
+/* Why a keep can never be reached, spelling out the schedule math —
+ * e.g. "2 times/day × 7 days = max 14 per week" */
+function tierWarnMsg(unit, cap) {
+    if (unit === "hour")
+        return "Never reached: the schedule never runs more than " + cap +
+            " time" + (cap === 1 ? "" : "s") + " in the same hour → max " +
+            cap + " per hour.";
+    const every = $("sched-every").checked;
+    const n = parseInt($("config-every-hours").value, 10) || 6;
+    const runs = every ? Math.max(1, Math.round(24 / n)) : Math.max(1, modalTimes.length);
+    const src = every ? "every " + n + "h → " + runs + "/day"
+                      : "the schedule above has " + runs + " time" +
+                        (runs === 1 ? "" : "s") + "/day";
+    if (unit === "day")
+        return "Never reached: " + src + " → max " + cap + " per day.";
+    const days = Math.ceil(TIER_UNIT_HOURS[unit] / 24);
+    return "Never reached: " + src + " × " + days + " days = max " + cap +
+        " per " + unit + ".";
+}
+
 /* Rows are kept in canonical order (finest unit first, larger keep first)
  * purely for readability — rules are independent and overlap, each looking
  * back over its own window from now; a backup survives if ANY rule keeps it. */
@@ -975,9 +995,7 @@ function renderTierList() {
         keep.value = t.keep;
         if (t.keep > cap) {
             keep.classList.add("tier-warn");
-            keepWrap.dataset.tooltip = "Never reached: the schedule creates at most " +
-                cap + " backup" + (cap === 1 ? "" : "s") + " per " + t.per +
-                " — this rule keeps everything in its window.";
+            keepWrap.dataset.tooltip = tierWarnMsg(t.per, cap);
         }
         keep.addEventListener("input", () => {
             t.keep = Math.min(100, Math.max(1, parseInt(keep.value, 10) || 1));
@@ -1007,10 +1025,6 @@ function renderTierList() {
         });
         span.addEventListener("change", renderTierList);
         cell("span", "tier-word", t.span === 1 ? t.per : TIER_PLURAL[t.per]);
-        const range = cell("span", "tier-range muted", "≤ " + t.span + TIER_ABBR[t.per]);
-        range.dataset.tooltip = "Looks at backups from the last " + t.span + " " +
-            (t.span === 1 ? t.per : TIER_PLURAL[t.per]) + " and keeps the newest " +
-            t.keep + " per " + t.per + ". Rules overlap — a backup survives if any rule keeps it.";
         const rm = cell("button", "tier-remove", "✕");
         rm.setAttribute("aria-label", "Remove tier");
         rm.addEventListener("click", () => {
