@@ -1130,7 +1130,15 @@ function saveConfigEntry() {
     const tiered = $("ret-tiered").checked;
     let policy = null;
     if (tiered) {
-        policy = tiersFromPolicy(modalTiers).slice(0, MAX_TIERS);
+        // Drop exact duplicate rows (an accidental double "Add tier" would
+        // otherwise stack its window, e.g. 1/year×3 twice = 1/year for 6y)
+        const seen = new Set();
+        policy = tiersFromPolicy(modalTiers).filter(t => {
+            const k = t.keep + "|" + t.per + "|" + t.span;
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+        }).slice(0, MAX_TIERS);
         if (!policy.length) {
             showConfigError("Add at least one retention tier");
             return;
