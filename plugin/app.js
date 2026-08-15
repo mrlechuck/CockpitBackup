@@ -841,8 +841,16 @@ function archiveRow(item) {
     const tdActions = document.createElement("td");
     tdActions.className = "cell-actions";
     tdActions.appendChild(iconButton("restore", "Restore", () => openRestoreDialog(item), "primary"));
-    if (!item.remote)   // download streams the local file; remote ones live on S3
-        tdActions.appendChild(iconButton("download", "Download", () => downloadArchive(item), "success"));
+    // Local archives stream straight from disk; S3 ones are fetched from the
+    // bucket first (spinner on the button), then streamed the same way
+    const dlBtn = iconButton("download",
+        item.remote ? "Download (fetches from S3 first)" : "Download",
+        () => downloadArchive(item, dlBtn), "success");
+    if (item.remote && !s3Ready()) {
+        dlBtn.disabled = true;
+        dlBtn.dataset.tooltip = "Enable S3 to download this remote archive";
+    }
+    tdActions.appendChild(dlBtn);
     const delBtn = iconButton("trash", "Delete", () => openDeleteDialog(item.name), "danger");
     if (item.remote && !s3Ready()) {
         // Deleting now would orphan the object on the bucket
@@ -1559,12 +1567,32 @@ function clearLog() {
 
 /* Streams the archive through a Cockpit fsread1 channel: the browser downloads
  * it directly, without buffering the whole file in memory. */
-function downloadArchive(item) {
+function downloadArchive(item, btn) {
     if (!cockpit.transport || !cockpit.transport.csrf_token) {
         toast("Download is not available in preview mode", "info");
         return;
     }
-    const path = config.destination.replace(/\/+$/, "") + "/" + item.name;
+    if (!item.remote) {
+        streamDownload(config.destination.replace(/\/+$/, "") + "/" + item.name, item.name);
+        return;
+    }
+    // S3 archive: have the backend pull it into a server-side cache first
+    // (reused if still there), then stream that file to the browser.
+    setLoading(btn, true);
+    toast("Fetching " + item.name + " from S3…", "info");
+    cockpit.spawn([HELPER, "fetch", item.name], { superuser: "require", err: "message" })
+        .then(out => {
+            const path = out.trim().split("\n").pop();
+            if (!path || path[0] !== "/") throw new Error("unexpected fetch reply: " + out);
+            streamDownload(path, item.name);
+        })
+        .catch(err => toast("Download failed: " + errText(err), "danger"))
+        .finally(() => setLoading(btn, false));
+}
+
+/* Stream a server-side file to the browser as an attachment (fsread1 channel:
+ * no buffering of the whole file in memory). */
+function streamDownload(path, filename) {
     const payload = {
         payload: "fsread1",
         binary: "raw",
@@ -1572,7 +1600,7 @@ function downloadArchive(item) {
         superuser: "try",
         max_read_size: 1099511627776,
         external: {
-            "content-disposition": 'attachment; filename="' + item.name + '"',
+            "content-disposition": 'attachment; filename="' + filename + '"',
             "content-type": "application/gzip"
         }
     };
@@ -1580,7 +1608,7 @@ function downloadArchive(item) {
         window.btoa(JSON.stringify(payload));
     const a = document.createElement("a");
     a.href = url;
-    a.download = item.name;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();

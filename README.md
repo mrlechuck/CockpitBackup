@@ -40,6 +40,9 @@ folder**, each with its own schedule, right from the web interface:
   S3-compatible service via custom endpoint). Remote backups are built in a temp
   folder, uploaded and removed locally; the archive list shows a Local/S3 badge and
   restore downloads them transparently
+- **Archive download**: every archive has a Download button — local ones stream
+  straight from disk, S3 ones are fetched from the bucket into a temporary
+  server-side cache first (cleaned automatically after an hour)
 - **Incremental backups**: per-folder choice between a full archive every time and
   an incremental chain — a periodic full plus daily archives containing **only what
   changed** since the previous backup. Restore transparently recombines the whole

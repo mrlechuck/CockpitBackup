@@ -1133,6 +1133,8 @@ EOF
 }
 
 cmd_list() {
+    # Housekeeping: drop S3 archives fetched for the Download button once stale
+    find "$FETCH_DIR" -maxdepth 1 -type f -mmin +60 -delete 2>/dev/null || true
     python3 -c '
 import json, os, glob, sys, shutil
 dest = sys.argv[1]
@@ -1435,6 +1437,35 @@ cmd_restore() {
     RESTORE_TMPD=""
     restore_emit done "$M" "$M" 100 0 ""
     echo "Restore completed."
+}
+
+# Make an archive readable locally for the UI's Download button and print its
+# path. Local archives print their real path; S3 archives are fetched into a
+# cache under the destination (reused if already there). The cache is cleaned
+# of entries older than an hour by cmd_list's housekeeping.
+FETCH_DIR="$DEST/.tmp/fetch"
+cmd_fetch() {
+    local name="${1:-}" archive
+    [ -n "$name" ] || die "usage: fetch ARCHIVE"
+    archive=$(archive_path "$name")
+    if [ -f "$archive" ]; then
+        printf '%s\n' "$archive"
+        return 0
+    fi
+    meta_is_remote "$archive.meta" || die "archive not found: $name"
+    s3_configured || die "archive is stored on S3 but S3 is not configured"
+    command -v aws >/dev/null || die "aws CLI is not installed"
+    mkdir -p "$FETCH_DIR"
+    local target="$FETCH_DIR/$name"
+    if [ -s "$target" ]; then
+        touch "$target" 2>/dev/null || true   # keep a re-download fresh in the cache
+        printf '%s\n' "$target"
+        return 0
+    fi
+    s3_run s3 cp "s3://$(s3_cfg bucket)/$(s3_key "$name")" "$target.part" --only-show-errors \
+        || { rm -f "$target.part"; die "download from S3 failed: $name"; }
+    mv -f "$target.part" "$target"
+    printf '%s\n' "$target"
 }
 
 # ---------- Consolidation: make finished chains obey the retention policy ----------
@@ -1811,6 +1842,7 @@ case "${1:-}" in
     restore)        shift; cmd_restore "$@" ;;
     delete)         shift; cmd_delete "$@" ;;
     consolidate)    shift; cmd_consolidate "${1:-}" ;;
+    fetch)          shift; cmd_fetch "${1:-}" ;;
     test-s3)        cmd_test_s3 ;;
     log)            shift; cmd_log "$@" ;;
     clear-log)      shift; cmd_clear_log "$@" ;;
