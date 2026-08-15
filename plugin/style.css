@@ -836,6 +836,9 @@ select { cursor: pointer; }
 .btn.loading::after {
     content: "";
     position: absolute;
+    box-sizing: border-box;   /* the * reset doesn't reach pseudo-elements:
+                                 without this the 2px border adds 4px and the
+                                 spinner sits 2px low/right of centre */
     top: 50%;
     left: 50%;
     right: auto;
