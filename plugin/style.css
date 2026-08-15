@@ -621,22 +621,10 @@ select { cursor: pointer; }
     border-color: var(--warning);
 }
 
-/* Bottone con spinner */
-.btn.loading { position: relative; color: transparent; }
-.btn.loading::after {
-    content: "";
-    position: absolute;
-    width: 15px;
-    height: 15px;
-    border: 2px solid rgba(255, 255, 255, 0.35);
-    border-top-color: #fff;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-}
-.btn.loading:not(.btn-primary):not(.btn-danger)::after {
-    border-color: color-mix(in srgb, var(--text) 25%, transparent);
-    border-top-color: var(--text);
-}
+/* Bottone con spinner: the icon/text keeps its space (transparent) so the
+ * button size never changes. The spinner pseudo-element rules live at the END
+ * of the file: tooltips share ::after, so the spinner must override them. */
+.btn.loading { position: relative; color: transparent; pointer-events: none; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -821,6 +809,58 @@ select { cursor: pointer; }
     opacity: 1;
     transform: translateX(-50%) translateY(0) rotate(45deg);
 }
+
+/* Action-column buttons sit against the table's right edge, inside a
+ * .table-wrap scroll container that clips overflow: right-align their tooltips
+ * so they stay within the table instead of being cut off */
+.cell-actions [data-tooltip]::after {
+    left: auto;
+    right: 0;
+    transform: translateY(3px);
+}
+.cell-actions [data-tooltip]:hover::after {
+    transform: translateY(0);
+}
+.cell-actions [data-tooltip]::before {
+    left: auto;
+    right: 11px;
+    transform: translateY(3px) rotate(45deg);
+}
+.cell-actions [data-tooltip]:hover::before {
+    transform: translateY(0) rotate(45deg);
+}
+
+/* While a button is loading, its ::after belongs to the SPINNER, not the
+ * tooltip (they share the pseudo-element — this block must stay after the
+ * tooltip rules). Centred in the button, layout untouched, tooltip suppressed. */
+.btn.loading::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    width: 15px;
+    height: 15px;
+    max-width: none;
+    margin: -7.5px 0 0 -7.5px;
+    padding: 0;
+    background: transparent;
+    border: 2px solid color-mix(in srgb, var(--text) 25%, transparent);
+    border-top-color: var(--text);
+    border-radius: 50%;
+    box-shadow: none;
+    opacity: 1;
+    transform: none;
+    transition: none;
+    animation: spin 0.7s linear infinite;
+}
+.btn-primary.loading::after,
+.btn-danger.loading::after {
+    border-color: rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
+}
+.btn.loading::before { content: none; }
 .switch input:disabled + .slider { opacity: 0.5; cursor: not-allowed; }
 .switch input:focus-visible + .slider { box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 40%, transparent); }
 
