@@ -1616,8 +1616,12 @@ function streamDownload(path, filename) {
         payload: "fsread1",
         binary: "raw",
         path,
-        superuser: "try",
-        max_read_size: 1099511627776,
+        // Everything else in this plugin runs with administrative access, and
+        // the download cache is written by root — read it the same way.
+        superuser: "require",
+        // Cockpit rejects the channel outright above its 16 GiB cap, which
+        // kills the download as a generic "network error" in the browser.
+        max_read_size: 16 * 1024 * 1024 * 1024,
         external: {
             "content-disposition": 'attachment; filename="' + filename + '"',
             "content-type": "application/gzip"
