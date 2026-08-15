@@ -1429,9 +1429,14 @@ cmd_restore() {
         local -a xargs=(-xf - -C "$target")
         [ "$M" -gt 1 ] && xargs+=(--listed-incremental=/dev/null)
         # gzip → byte counter (emits @@P@@ progress on fd 4 = restore stdout) → tar
-        gzip -dc "$src" \
+        if ! gzip -dc "$src" \
             | python3 "$cpy" emit "$RDEN" "$(date +%s)" "$idx" "$M" 2>&4 \
-            | tar "${xargs[@]}" 2> >(grep -v 'Removing leading' >&2 || true)
+            | tar "${xargs[@]}" 2> >(grep -v 'Removing leading' >&2 || true); then
+            # GNU tar's rename replay can trip over rotated directories —
+            # extract_member repairs and retries (no byte progress meanwhile)
+            restore_emit extract "$idx" "$M" "" "" "repairing directory renames…"
+            extract_member "$src" "$target" || die "extracting $n failed"
+        fi
         [ "$src" = "$DEST/$n" ] || rm -f "$src"
     done
     exec 4>&-
@@ -1439,6 +1444,43 @@ cmd_restore() {
     RESTORE_TMPD=""
     restore_emit done "$M" "$M" 100 0 ""
     echo "Restore completed."
+}
+
+# Extract one chain member into WORK, repairing GNU tar's fragile rename
+# replay. Apps that rotate directories (radarr's MediaCover: rm B; mv A B)
+# make tar record a rename it then cannot replay — "Cannot rename 'A' to 'B':
+# Directory not empty" — because the stale target still exists in the tree.
+# That stale directory is exactly what the rename replaces, so drop it and
+# re-run the member (bounded retries; any other error fails normally).
+extract_member() {   # SRC WORKDIR
+    local src="$1" work="$2" tries=0 errf to
+    errf=$(mktemp) || return 1
+    while :; do
+        if gzip -dc "$src" | LC_ALL=C tar -xf - -C "$work" --listed-incremental=/dev/null 2> "$errf"; then
+            grep -v 'Removing leading' "$errf" >&2 || true
+            rm -f "$errf"
+            return 0
+        fi
+        tries=$((tries + 1))
+        [ "$tries" -le 10 ] || break
+        to=$(python3 - "$errf" <<'PY' || true
+import re, sys
+for line in open(sys.argv[1], errors="replace"):
+    if "annot rename" in line:
+        q = re.findall(r"['\"‘’]([^'\"‘’]+)['\"‘’]", line)
+        if len(q) >= 2:
+            print(q[1])
+            break
+PY
+)
+        case "$to" in ''|/*|*..*) break ;; esac
+        [ -d "$work/$to" ] || break
+        echo "note: clearing stale directory '$to' left by a recorded rename, retrying" >&2
+        rm -rf "$work/$to"
+    done
+    grep -v 'Removing leading' "$errf" >&2 || true
+    rm -f "$errf"
+    return 1
 }
 
 # ---------- Download support ----------
@@ -1514,9 +1556,7 @@ cmd_fetch() {
     local m src
     for m in "${members[@]}"; do
         src=$(fetch_raw "$m") || { rm -rf "$work"; die "cannot obtain chain member: $m"; }
-        gzip -dc "$src" | tar -xf - -C "$work" --listed-incremental=/dev/null \
-            2> >(grep -v 'Removing leading' >&2 || true) \
-            || { rm -rf "$work"; die "extracting $m failed"; }
+        extract_member "$src" "$work" || { rm -rf "$work"; die "extracting $m failed"; }
     done
     [ -e "$work/$rel" ] || { rm -rf "$work"; die "combined tree is empty ($rel)"; }
     tar -cf - -C "$work" "$rel" 2>/dev/null | gzip > "$combined.part" \
@@ -1704,8 +1744,7 @@ consolidate_one_chain() {   # FOLDER CHAIN PLAN_LINE...
         else
             ok=false; break
         fi
-        gzip -dc "$src" | tar -xf - -C "$work" --listed-incremental=/dev/null \
-            2> >(grep -v 'Removing leading' >&2 || true) || { ok=false; break; }
+        extract_member "$src" "$work" || { ok=false; break; }
         [ "$src" = "$DEST/$name" ] || rm -f "$src"
 
         if [ "$act" = "KEEP" ] && [ "$lvl" = "1" ]; then

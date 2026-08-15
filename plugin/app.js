@@ -1582,7 +1582,13 @@ function downloadArchive(item, btn) {
     }
     // Delta (local or S3): the backend rebuilds the combined chain state into a
     // temporary archive. Plain S3 archive: it is fetched into the cache. Either
-    // way `fetch` prints a locally readable path to stream.
+    // way `fetch` prints a locally readable path to stream. The path is also
+    // remembered so a repeat click saves instantly from the server-side cache.
+    const cached = fetchedPaths[item.name];
+    if (cached && Date.now() - cached.ts < 50 * 60000) {
+        streamDownload(cached.path, cached.path.split("/").pop());
+        return;
+    }
     setLoading(btn, true);
     toast(item.level === 1
         ? "Building the combined archive (chain up to this point)…"
@@ -1591,14 +1597,20 @@ function downloadArchive(item, btn) {
         .then(out => {
             const path = out.trim().split("\n").pop();
             if (!path || path[0] !== "/") throw new Error("unexpected fetch reply: " + out);
+            fetchedPaths[item.name] = { path, ts: Date.now() };
             streamDownload(path, path.split("/").pop());
+            toast("Archive ready — if the download did not start, click Download again", "success");
         })
         .catch(err => toast("Download failed: " + errText(err), "danger"))
         .finally(() => setLoading(btn, false));
 }
 
+let fetchedPaths = {};   // archive name -> { path, ts } (mirrors the server cache)
+
 /* Stream a server-side file to the browser as an attachment (fsread1 channel:
- * no buffering of the whole file in memory). */
+ * no buffering of the whole file in memory). Should a browser ever swallow the
+ * programmatic click after the async fetch, the path is cached — a second
+ * click (a fresh user gesture) saves instantly. */
 function streamDownload(path, filename) {
     const payload = {
         payload: "fsread1",
