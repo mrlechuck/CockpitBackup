@@ -830,6 +830,25 @@ select { cursor: pointer; }
     transform: translateY(0) rotate(45deg);
 }
 
+/* Badges sit against the table's LEFT edge — mirror fix: left-align their
+ * tooltips so the scroll container can't cut them off */
+.archive-badges [data-tooltip]::after {
+    left: 0;
+    right: auto;
+    transform: translateY(3px);
+}
+.archive-badges [data-tooltip]:hover::after {
+    transform: translateY(0);
+}
+.archive-badges [data-tooltip]::before {
+    left: 11px;
+    right: auto;
+    transform: translateY(3px) rotate(45deg);
+}
+.archive-badges [data-tooltip]:hover::before {
+    transform: translateY(0) rotate(45deg);
+}
+
 /* While a button is loading, its ::after belongs to the SPINNER, not the
  * tooltip (they share the pseudo-element — this block must stay after the
  * tooltip rules). Centred in the button, layout untouched, tooltip suppressed. */
