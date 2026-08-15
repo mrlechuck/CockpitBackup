@@ -5,7 +5,7 @@
     <title>Backup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- The ?v= query busts browser caches: bump it on every release -->
-    <link rel="stylesheet" href="style.css?v=2.1.1">
+    <link rel="stylesheet" href="style.css?v=2.2.0">
     <script src="../base1/cockpit.js"></script>
 </head>
 <body>
@@ -15,7 +15,7 @@
         <div id="view-list">
             <header class="page-header">
                 <div class="app-icon" aria-hidden="true">
-                    <img src="app-icon.svg?v=2.1.1" alt="" width="30" height="30">
+                    <img src="app-icon.svg?v=2.2.0" alt="" width="30" height="30">
                 </div>
                 <div>
                     <h1>Folder backup</h1>
@@ -294,6 +294,16 @@
                     <p class="field-hint muted">Between fulls, each backup stores only what changed
                         since the previous one. Restore automatically combines the whole chain.</p>
                 </div>
+                <div class="field" id="config-consolidate-field" hidden>
+                    <label class="consolidate-label">
+                        <input type="checkbox" id="config-consolidate">
+                        <span>Consolidate finished chains per retention</span>
+                    </label>
+                    <p class="field-hint muted">When a chain is complete, keep only the restore
+                        points your retention selects — each converted into a standalone Full dated
+                        at its original time — and delete the rest of the chain. The current chain
+                        keeps its daily Deltas until a new Baseline starts.</p>
+                </div>
 
                 <h3 class="modal-section-title">Schedule</h3>
                 <div class="ret-modes">
@@ -482,6 +492,6 @@
     <!-- Toasts -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
-    <script src="app.js?v=2.1.1"></script>
+    <script src="app.js?v=2.2.0"></script>
 </body>
 </html>

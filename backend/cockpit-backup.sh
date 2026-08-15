@@ -746,6 +746,12 @@ retentions = {b["folder"]: int(b.get("retention_days", default_ret))
 # [{keep, per, span}, …] with per ∈ hour|day|week|month|year.
 policies = {b["folder"]: b["retention"] for b in cfg.get("backups", [])
             if isinstance(b.get("retention"), (dict, list))}
+# Folders whose finished chains are consolidated per retention point-by-point:
+# prune must leave their multi-member chains alone (a chain dated by its newest
+# member could lose its bucket to a newer chain and be dropped whole, before
+# consolidation could materialize the points the policy wants to keep).
+consolidated_folders = {b["folder"] for b in cfg.get("backups", [])
+                        if b.get("mode") == "incremental" and b.get("consolidate")}
 now = time.time()
 
 def read_meta(path):
@@ -853,6 +859,8 @@ for name, e in entries.items():
 units_by_folder = {}
 for key, members in groups.items():
     folder = next((entries[n]["folder"] for n in members if entries[n]["folder"]), None)
+    if folder in consolidated_folders and len(members) > 1:
+        continue   # chains of consolidate-enabled folders belong to consolidation
     newest = max(entries[n]["mtime"] for n in members)
     units_by_folder.setdefault(folder, []).append((newest, key))
 
@@ -969,6 +977,7 @@ cmd_backup() {
 
     [ "$count" -gt 0 ] || die "no valid folders to back up (check the configuration)"
     prune
+    cmd_consolidate
 }
 
 # Called by the systemd timer at each configured time. A folder is due when its
@@ -1065,7 +1074,7 @@ EOF
         count=$((count + 1))
     done <<< "$due"
 
-    [ "$count" -eq 0 ] || prune
+    [ "$count" -eq 0 ] || { prune; cmd_consolidate; }
 }
 
 # Regenerate the timer schedule: one OnCalendar entry per distinct configured
@@ -1428,6 +1437,276 @@ cmd_restore() {
     echo "Restore completed."
 }
 
+# ---------- Consolidation: make finished chains obey the retention policy ----------
+# Opt-in per folder ("consolidate": true, incremental only). The retention policy
+# (every tier: hours/days/weeks/months/years, or the flat day rule) selects which
+# RESTORE POINTS to keep — the same GFS algorithm prune uses, applied to single
+# archives instead of whole chains. In FINISHED chains (not the folder's active
+# one) each kept delta is materialized as a standalone synthetic full dated at its
+# original time, and every other member is removed (S3 too). The active chain
+# stays granular. Safe: synthetics are built and verified BEFORE anything is
+# deleted; any failure rolls back and leaves the chain intact.
+
+write_consolidated_meta() {   # PATH FOLDER REMOTE(true/false) USIZE SIZE NAME MTIME
+    python3 - "$@" <<'EOF'
+import json, sys
+path, folder, remote, usize, size, name, mtime = sys.argv[1:8]
+meta = {"folder": folder, "trigger": "consolidate", "level": 0,
+        "chain": name, "consolidated": True,
+        "usize": int(usize or 0), "mtime": int(mtime or 0)}
+if remote == "true":
+    meta["remote"] = True; meta["s3"] = True; meta["size"] = int(size or 0)
+json.dump(meta, open(path, "w"))
+EOF
+}
+
+# Per-folder plan: which members of finished chains to KEEP (per the retention
+# policy) and which to DROP. One line per member, chains printed contiguously:
+#   ACTION <TAB> CHAIN <TAB> LEVEL <TAB> MTIME <TAB> REMOTE(0/1) <TAB> NAME
+# Selection runs over ALL of the folder's archives (active chain and standalone
+# fulls included, so bucket quotas are counted correctly), but only members of
+# finished multi-member chains are emitted — the rest is prune's business.
+consolidation_plan() {   # FOLDER ACTIVE_CHAIN
+    python3 - "$CONFIG" "$DEST" "$RETENTION" "$1" "$2" <<'EOF'
+import json, os, glob, sys, time
+import datetime as _dt
+
+cfgp, dest, default_ret, folder, active = sys.argv[1:6]
+cfg = json.load(open(cfgp))
+entry = next((b for b in cfg.get("backups", []) if b.get("folder") == folder), {})
+pol = entry.get("retention") if isinstance(entry.get("retention"), (dict, list)) else None
+ret_days = int(entry.get("retention_days", default_ret))
+now = time.time()
+
+UNIT_SECONDS = {"hour": 3600, "day": 86400, "week": 7 * 86400,
+                "month": 30 * 86400, "year": 365 * 86400}
+UNIT_ORDER = {"hour": 0, "day": 1, "week": 2, "month": 3, "year": 4}
+
+def norm_policy(pol):
+    tiers = []
+    if isinstance(pol, dict):
+        for k, unit, span_key in (("daily", "day", "days"),
+                                  ("weekly", "week", "weeks"),
+                                  ("monthly", "month", "months"),
+                                  ("yearly", "year", "years")):
+            t = pol.get(k) or {}
+            try:
+                keep, span = int(t.get("keep", 0)), int(t.get(span_key, 0))
+            except (TypeError, ValueError):
+                continue
+            if keep > 0 and span > 0:
+                tiers.append((keep, unit, span))
+    elif isinstance(pol, list):
+        for t in pol:
+            if not isinstance(t, dict):
+                continue
+            try:
+                keep, span = int(t.get("keep", 0)), int(t.get("span", 0))
+            except (TypeError, ValueError):
+                continue
+            unit = t.get("per")
+            if unit in UNIT_SECONDS and keep > 0 and span > 0:
+                tiers.append((keep, unit, span))
+    tiers.sort(key=lambda t: (UNIT_ORDER[t[1]], -t[0]))
+    return tiers
+
+def bucket_id(unit, t):
+    if unit == "hour":
+        return (t.date().isoformat(), t.hour)
+    if unit == "day":
+        return t.date().isoformat()
+    if unit == "week":
+        iso = t.isocalendar()
+        return (iso[0], iso[1])
+    if unit == "month":
+        return (t.year, t.month)
+    return t.year
+
+points = []   # (mtime, name, chain, level, remote)
+for mp in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
+    try:
+        meta = json.load(open(mp))
+    except Exception:
+        continue
+    if meta.get("folder") != folder:
+        continue
+    name = os.path.basename(mp)[:-5]
+    remote = bool(meta.get("remote"))
+    arch = os.path.join(dest, name)
+    if not remote and not os.path.exists(arch):
+        continue
+    mt = meta.get("mtime")
+    if mt is None:
+        try:
+            mt = os.stat(arch).st_mtime
+        except OSError:
+            mt = now
+    points.append((float(mt), name, meta.get("chain") or name,
+                   int(meta.get("level", 0) or 0), remote))
+
+units = [(mt, name) for mt, name, chain, level, remote in points]
+if pol:
+    tiers = norm_policy(pol)
+    kept = set()
+    ordered = sorted(units, reverse=True)
+    for keep, unit, span in tiers:
+        window = span * UNIT_SECONDS[unit]
+        counts = {}
+        for ts, key in ordered:
+            if now - ts <= window:
+                b = bucket_id(unit, _dt.datetime.fromtimestamp(ts))
+                if counts.get(b, 0) < keep:
+                    counts[b] = counts.get(b, 0) + 1
+                    kept.add(key)
+else:
+    kept = {name for mt, name in units if now - mt <= ret_days * 86400}
+if units:
+    kept.add(max(units)[1])   # never drop the folder's most recent point
+
+chains = {}
+for mt, name, chain, level, remote in points:
+    chains.setdefault(chain, []).append((mt, name, level, remote))
+for chain, members in sorted(chains.items()):
+    if chain == active or len(members) < 2:
+        continue
+    for mt, name, level, remote in sorted(members):
+        act = "KEEP" if name in kept else "DROP"
+        print("%s\t%s\t%d\t%d\t%d\t%s" % (act, chain, level, int(mt),
+                                          1 if remote else 0, name))
+EOF
+}
+
+# Consolidate one finished chain according to its plan lines. Single pass: the
+# chain is extracted member by member (incremental semantics); at each KEPT
+# delta the current tree is repacked as a synthetic full dated at that member's
+# time. Only when every step succeeded are the replaced originals deleted.
+consolidate_one_chain() {   # FOLDER CHAIN PLAN_LINE...
+    local folder="$1" chain="$2"; shift 2
+    local rel="${folder#/}" slug; slug=$(slug_of "$folder")
+    local -a order=()
+    local line act lvl mt rmt name
+    for line in "$@"; do
+        IFS=$'\t' read -r act _ lvl mt rmt name <<< "$line"
+        order+=("$act|$lvl|$mt|$rmt|$name")
+    done
+    # Nothing to do when every member is a kept baseline/full already
+    local need=false e
+    for e in "${order[@]}"; do
+        IFS='|' read -r act lvl mt rmt name <<< "$e"
+        [ "$act" = "DROP" ] && need=true
+        [ "$act" = "KEEP" ] && [ "$lvl" = "1" ] && need=true
+    done
+    $need || return 0
+
+    echo "Consolidating chain $chain of $folder (retention-selected points) …"
+    local tmpd; tmpd=$(mktemp -d) || return 1
+    local work="$tmpd/tree"; mkdir -p "$work"
+    local -a made=() replaced=()
+    local src ok=true stamp sname synth usize size_b
+    for e in "${order[@]}"; do
+        IFS='|' read -r act lvl mt rmt name <<< "$e"
+        if [ -f "$DEST/$name" ]; then
+            src="$DEST/$name"
+        elif [ "$rmt" = "1" ]; then
+            { s3_configured && command -v aws >/dev/null; } || { ok=false; break; }
+            src="$tmpd/$name"
+            s3_run s3 cp "s3://$(s3_cfg bucket)/$(s3_key "$name")" "$src" --only-show-errors || { ok=false; break; }
+        else
+            ok=false; break
+        fi
+        gzip -dc "$src" | tar -xf - -C "$work" --listed-incremental=/dev/null \
+            2> >(grep -v 'Removing leading' >&2 || true) || { ok=false; break; }
+        [ "$src" = "$DEST/$name" ] || rm -f "$src"
+
+        if [ "$act" = "KEEP" ] && [ "$lvl" = "1" ]; then
+            stamp=$(printf '%s' "$name" | sed -E 's/^backup-.*-([0-9]{8}-[0-9]{6})-(incr|full)\.tar\.gz$/\1/')
+            sname="backup-$slug-$stamp-full.tar.gz"
+            synth="$tmpd/$sname"
+            tar -cf - -C "$work" "$rel" 2>/dev/null | gzip > "$synth" || { ok=false; break; }
+            { gzip -t "$synth" 2>/dev/null && [ -s "$synth" ]; } || { ok=false; break; }
+            usize=$(du -sb "$work/$rel" 2>/dev/null | cut -f1)
+            case "$usize" in ''|*[!0-9]*) usize=0 ;; esac
+            size_b=$(wc -c < "$synth" | tr -d ' ')
+            if [ "$rmt" = "1" ]; then
+                s3_run s3 cp "$synth" "s3://$(s3_cfg bucket)/$(s3_key "$sname")" --only-show-errors || { ok=false; break; }
+                s3_run s3 ls "s3://$(s3_cfg bucket)/$(s3_key "$sname")" >/dev/null 2>&1 || { ok=false; break; }
+                write_consolidated_meta "$DEST/$sname.meta" "$folder" true "$usize" "$size_b" "$sname" "$mt"
+                rm -f "$synth"
+                made+=("$sname|1")
+            else
+                mv -f "$synth" "$DEST/$sname" || { ok=false; break; }
+                write_consolidated_meta "$DEST/$sname.meta" "$folder" false "$usize" "$size_b" "$sname" "$mt"
+                touch -d "@$mt" "$DEST/$sname" 2>/dev/null || true
+                made+=("$sname|0")
+            fi
+            replaced+=("$name|$rmt")
+        elif [ "$act" = "DROP" ]; then
+            replaced+=("$name|$rmt")
+        fi
+    done
+
+    if ! $ok; then
+        for e in ${made[@]+"${made[@]}"}; do
+            IFS='|' read -r sname rmt <<< "$e"
+            [ "$rmt" = "1" ] && s3_delete_remote "$sname"
+            rm -f "$DEST/$sname" "$DEST/$sname.meta"
+        done
+        rm -rf "$tmpd"
+        echo "consolidate: chain $chain left intact (a step failed)" >&2
+        return 1
+    fi
+    rm -rf "$tmpd"
+    local cnt=0
+    for e in ${replaced[@]+"${replaced[@]}"}; do
+        IFS='|' read -r name rmt <<< "$e"
+        [ "$rmt" = "1" ] && s3_delete_remote "$name"
+        rm -f "$DEST/$name" "$DEST/$name.meta"
+        cnt=$((cnt + 1))
+    done
+    echo "Chain consolidated: ${#made[@]} synthetic full(s) kept, $cnt archives removed."
+    log_line "$folder" "consolidate" "Chain consolidated per retention: ${#made[@]} synthetic full(s), $cnt archives removed"
+}
+
+consolidate_folder() {   # FOLDER ACTIVE_CHAIN
+    local folder="$1" active="$2" plan cur="" line chain
+    plan=$(consolidation_plan "$folder" "$active") || return 0
+    [ -n "$plan" ] || return 0
+    local -a lines=()
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        chain=$(printf '%s' "$line" | cut -f2)
+        if [ -n "$cur" ] && [ "$chain" != "$cur" ]; then
+            consolidate_one_chain "$folder" "$cur" "${lines[@]}" || echo "consolidate: skipped chain $cur" >&2
+            lines=()
+        fi
+        cur="$chain"
+        lines+=("$line")
+    done <<< "$plan"
+    if [ -n "$cur" ] && [ "${#lines[@]}" -gt 0 ]; then
+        consolidate_one_chain "$folder" "$cur" "${lines[@]}" || echo "consolidate: skipped chain $cur" >&2
+    fi
+}
+
+cmd_consolidate() {   # [FOLDER] — apply retention inside finished chains
+    local only="${1:-}" folders folder slug active
+    folders=$(python3 -c '
+import json, sys
+cfg = json.load(open(sys.argv[1])); only = sys.argv[2]
+for b in cfg.get("backups", []):
+    if only and b.get("folder") != only: continue
+    if b.get("mode") == "incremental" and b.get("consolidate"):
+        print(b["folder"])
+' "$CONFIG" "$only")
+    [ -n "$folders" ] || return 0
+    mkdir -p "$DEST"
+    while IFS= read -r folder; do
+        [ -n "$folder" ] || continue
+        slug=$(slug_of "$folder")
+        active=$(read_chain "$slug" | cut -f1)
+        consolidate_folder "$folder" "$active"
+    done <<< "$folders"
+}
+
 cmd_delete() {
     local name="${1:-}"
     [ -n "$name" ] || die "usage: delete ARCHIVE"
@@ -1531,11 +1810,12 @@ case "${1:-}" in
     estimate)       shift; cmd_estimate "$@" ;;
     restore)        shift; cmd_restore "$@" ;;
     delete)         shift; cmd_delete "$@" ;;
+    consolidate)    shift; cmd_consolidate "${1:-}" ;;
     test-s3)        cmd_test_s3 ;;
     log)            shift; cmd_log "$@" ;;
     clear-log)      shift; cmd_clear_log "$@" ;;
     *)
-        echo "Usage: $0 {backup [FOLDER]|backup-due|apply-schedule|list|estimate FOLDER [PATTERN...]|restore ARCHIVE [TARGET]|delete ARCHIVE|test-s3|log FOLDER|clear-log FOLDER}" >&2
+        echo "Usage: $0 {backup [FOLDER]|backup-due|apply-schedule|list|estimate FOLDER [PATTERN...]|restore ARCHIVE [TARGET]|delete ARCHIVE|consolidate [FOLDER]|test-s3|log FOLDER|clear-log FOLDER}" >&2
         exit 2
         ;;
 esac

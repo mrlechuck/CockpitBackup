@@ -1159,6 +1159,7 @@ function openConfigDialog(idx) {
     const entryIncremental = idx !== -1 && config.backups[idx].mode === "incremental";
     $("config-mode").value = entryIncremental ? "incremental" : "full";
     $("config-full-every").value = idx === -1 ? 7 : (config.backups[idx].full_every || 7);
+    $("config-consolidate").checked = idx !== -1 && !!config.backups[idx].consolidate;
     updateModeField();
     $("estimate-result").textContent = "";
     showConfigError(null);
@@ -1167,7 +1168,9 @@ function openConfigDialog(idx) {
 }
 
 function updateModeField() {
-    $("config-full-every-field").hidden = $("config-mode").value !== "incremental";
+    const incr = $("config-mode").value === "incremental";
+    $("config-full-every-field").hidden = !incr;
+    $("config-consolidate-field").hidden = !incr;
 }
 
 function showConfigError(msg) {
@@ -1257,8 +1260,11 @@ function saveConfigEntry() {
     else delete entry.excludes;
     if (useS3) entry.s3 = true;
     else delete entry.s3;
-    if (incremental) { entry.mode = "incremental"; entry.full_every = fullEvery; }
-    else { delete entry.mode; delete entry.full_every; }
+    if (incremental) {
+        entry.mode = "incremental"; entry.full_every = fullEvery;
+        if ($("config-consolidate").checked) entry.consolidate = true;
+        else delete entry.consolidate;
+    } else { delete entry.mode; delete entry.full_every; delete entry.consolidate; }
 
     if (editingIndex === -1)
         config.backups.push(entry);

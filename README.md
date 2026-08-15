@@ -178,6 +178,29 @@ Safety rules, all automatic:
 - works with **S3 storage** too: snapshots stay local, chain restore downloads
   every needed member.
 
+### Consolidation (optional, per folder)
+
+Without consolidation, retention treats a chain as one unit: "keep 1 per week"
+keeps one **chain** per week — physically the Baseline plus all its Deltas
+(~7 files with a daily schedule). Enable **"Consolidate finished chains per
+retention"** in the add/edit dialog to get literally what the policy says:
+
+- as soon as a chain is **finished** (a new Baseline has started), the retention
+  policy — every tier: hours, days, weeks, months, years — selects which restore
+  points of that chain survive, with the same bucket algorithm used for pruning
+  (per calendar bucket, the newest points win: with `1/week` that is the last
+  backup of each ISO week);
+- each selected point is **materialized as a standalone Full**, rebuilt from the
+  chain (deletions included) and dated at the point's original time — so it keeps
+  aging correctly through the week/month/year tiers;
+- everything else in the chain is deleted (from S3 too). The **active** chain
+  keeps its daily Deltas until the next Baseline starts.
+
+The synthetic Full is built and verified **before** anything is deleted; any
+failure (corrupt member, failed upload) rolls back and leaves the chain intact.
+Example: daily backups, `keep 1/week for 4 weeks` → after consolidation each past
+week is exactly **one** Full dated at its last backup.
+
 ### S3 remote storage
 
 Enable it in the **Remote storage (S3)** card: bucket, region, credentials, and
@@ -237,6 +260,7 @@ sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh list
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh estimate /var/www cache '*.log'
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh restore backup-var-www-20260807-020000.tar.gz
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh restore backup-var-www-20260807-020000.tar.gz /tmp/test-restore
+sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh consolidate
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh test-s3
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh log /var/www
 sudo /usr/local/libexec/cockpit-backup/cockpit-backup.sh clear-log /var/www
