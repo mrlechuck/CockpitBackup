@@ -1133,8 +1133,10 @@ EOF
 }
 
 cmd_list() {
-    # Housekeeping: drop S3 archives fetched for the Download button once stale
+    # Housekeeping: drop Download-cache entries (fetched S3 copies, combined
+    # delta archives, leftover build dirs) once stale
     find "$FETCH_DIR" -maxdepth 1 -type f -mmin +60 -delete 2>/dev/null || true
+    find "$FETCH_DIR" -maxdepth 1 -name '.build.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
     python3 -c '
 import json, os, glob, sys, shutil
 dest = sys.argv[1]
@@ -1439,14 +1441,17 @@ cmd_restore() {
     echo "Restore completed."
 }
 
-# Make an archive readable locally for the UI's Download button and print its
-# path. Local archives print their real path; S3 archives are fetched into a
-# cache under the destination (reused if already there). The cache is cleaned
-# of entries older than an hour by cmd_list's housekeeping.
+# ---------- Download support ----------
+# The Download button asks the backend for a locally readable path via `fetch`.
+# Full/Baseline archives: the real file (S3 ones are pulled into a cache under
+# the destination first, reused while fresh). Deltas: a raw delta alone is just
+# that day's changes, so the chain state up to that member is rebuilt and packed
+# into a TEMPORARY combined archive in the same cache. Everything in the cache
+# is cleaned after an hour by cmd_list's housekeeping.
 FETCH_DIR="$DEST/.tmp/fetch"
-cmd_fetch() {
-    local name="${1:-}" archive
-    [ -n "$name" ] || die "usage: fetch ARCHIVE"
+
+fetch_raw() {   # NAME → print a locally readable copy of the archive as-is
+    local name="$1" archive
     archive=$(archive_path "$name")
     if [ -f "$archive" ]; then
         printf '%s\n' "$archive"
@@ -1458,7 +1463,7 @@ cmd_fetch() {
     mkdir -p "$FETCH_DIR"
     local target="$FETCH_DIR/$name"
     if [ -s "$target" ]; then
-        touch "$target" 2>/dev/null || true   # keep a re-download fresh in the cache
+        touch "$target" 2>/dev/null || true   # keep a reused copy fresh in the cache
         printf '%s\n' "$target"
         return 0
     fi
@@ -1466,6 +1471,60 @@ cmd_fetch() {
         || { rm -f "$target.part"; die "download from S3 failed: $name"; }
     mv -f "$target.part" "$target"
     printf '%s\n' "$target"
+}
+
+cmd_fetch() {
+    local name="${1:-}"
+    [ -n "$name" ] || die "usage: fetch ARCHIVE"
+    archive_path "$name" >/dev/null
+    local lvl base
+    IFS=$'\t' read -r lvl base <<< "$(archive_meta_level "$DEST/$name.meta")"
+    if [ "$lvl" != "1" ]; then
+        fetch_raw "$name"
+        return 0
+    fi
+
+    # Delta: rebuild the combined state of the chain up to this member
+    local stem="${name%-incr.tar.gz}"
+    [ "$stem" = "$name" ] && stem="${name%.tar.gz}"
+    local combined="$FETCH_DIR/$stem-combined.tar.gz"
+    if [ -s "$combined" ]; then
+        touch "$combined" 2>/dev/null || true
+        printf '%s\n' "$combined"
+        return 0
+    fi
+
+    local -a members=()
+    local cur="$name" info l b folder rel
+    while :; do
+        members=("$cur" ${members[@]+"${members[@]}"})
+        [ "${#members[@]}" -le 400 ] || die "backup chain too long or corrupted"
+        info=$(archive_meta_level "$DEST/$cur.meta")
+        IFS=$'\t' read -r l b <<< "$info"
+        [ "$l" = "1" ] || break
+        [ -n "$b" ] || die "incremental archive has no recorded base: $cur"
+        cur="$b"
+    done
+    folder=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("folder",""))' "$DEST/$name.meta" 2>/dev/null)
+    [ -n "$folder" ] || die "no folder recorded for $name"
+    rel="${folder#/}"
+
+    mkdir -p "$FETCH_DIR"
+    local work; work=$(mktemp -d "$FETCH_DIR/.build.XXXXXX") || die "cannot create the work dir"
+    local m src
+    for m in "${members[@]}"; do
+        src=$(fetch_raw "$m") || { rm -rf "$work"; die "cannot obtain chain member: $m"; }
+        gzip -dc "$src" | tar -xf - -C "$work" --listed-incremental=/dev/null \
+            2> >(grep -v 'Removing leading' >&2 || true) \
+            || { rm -rf "$work"; die "extracting $m failed"; }
+    done
+    [ -e "$work/$rel" ] || { rm -rf "$work"; die "combined tree is empty ($rel)"; }
+    tar -cf - -C "$work" "$rel" 2>/dev/null | gzip > "$combined.part" \
+        || { rm -rf "$work"; rm -f "$combined.part"; die "building the combined archive failed"; }
+    rm -rf "$work"
+    gzip -t "$combined.part" 2>/dev/null || { rm -f "$combined.part"; die "combined archive failed the integrity check"; }
+    mv -f "$combined.part" "$combined"
+    printf '%s\n' "$combined"
 }
 
 # ---------- Consolidation: make finished chains obey the retention policy ----------

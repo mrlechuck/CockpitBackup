@@ -841,10 +841,13 @@ function archiveRow(item) {
     const tdActions = document.createElement("td");
     tdActions.className = "cell-actions";
     tdActions.appendChild(iconButton("restore", "Restore", () => openRestoreDialog(item), "primary"));
-    // Local archives stream straight from disk; S3 ones are fetched from the
-    // bucket first (spinner on the button), then streamed the same way
-    const dlBtn = iconButton("download",
-        item.remote ? "Download (fetches from S3 first)" : "Download",
+    // Local Full/Baseline archives stream straight from disk. Deltas are first
+    // rebuilt server-side into a temporary combined archive (the whole chain
+    // state up to that point); S3 archives are fetched from the bucket first.
+    const dlTip = item.level === 1
+        ? "Download (rebuilds the combined state up to this point)"
+        : (item.remote ? "Download (fetches from S3 first)" : "Download");
+    const dlBtn = iconButton("download", dlTip,
         () => downloadArchive(item, dlBtn), "success");
     if (item.remote && !s3Ready()) {
         dlBtn.disabled = true;
@@ -1572,19 +1575,23 @@ function downloadArchive(item, btn) {
         toast("Download is not available in preview mode", "info");
         return;
     }
-    if (!item.remote) {
+    if (!item.remote && item.level !== 1) {
+        // Local Full/Baseline: the file on disk is already the whole thing
         streamDownload(config.destination.replace(/\/+$/, "") + "/" + item.name, item.name);
         return;
     }
-    // S3 archive: have the backend pull it into a server-side cache first
-    // (reused if still there), then stream that file to the browser.
+    // Delta (local or S3): the backend rebuilds the combined chain state into a
+    // temporary archive. Plain S3 archive: it is fetched into the cache. Either
+    // way `fetch` prints a locally readable path to stream.
     setLoading(btn, true);
-    toast("Fetching " + item.name + " from S3…", "info");
+    toast(item.level === 1
+        ? "Building the combined archive (chain up to this point)…"
+        : "Fetching " + item.name + " from S3…", "info");
     cockpit.spawn([HELPER, "fetch", item.name], { superuser: "require", err: "message" })
         .then(out => {
             const path = out.trim().split("\n").pop();
             if (!path || path[0] !== "/") throw new Error("unexpected fetch reply: " + out);
-            streamDownload(path, item.name);
+            streamDownload(path, path.split("/").pop());
         })
         .catch(err => toast("Download failed: " + errText(err), "danger"))
         .finally(() => setLoading(btn, false));
