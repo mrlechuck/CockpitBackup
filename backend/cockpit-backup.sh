@@ -1550,6 +1550,21 @@ PY
         echo "note: clearing stale directory '$to' left by a recorded rename, retrying" >&2
         rm -rf "$work/$to"
     done
+    # Final fallback. GNU tar CONTINUES extracting after a failed rename replay
+    # and only flags the exit status at the end — the member's content is in
+    # place except for rotated cache dirs (plex/radarr bundles) whose inode
+    # reuse made tar record bogus renames no replay can satisfy. When rename
+    # replays are the ONLY errors, accept the member with a loud warning
+    # instead of failing the whole chain over regenerable caches.
+    if grep -q "Cannot rename" "$errf" && \
+       ! grep -vE "Cannot rename|Exiting with failure status due to previous errors|Removing leading" "$errf" | grep -q .; then
+        local nrn
+        nrn=$(grep -c "Cannot rename" "$errf" || true)
+        echo "warning: member applied with $nrn unresolved directory rename(s) — rotated cache dirs may be stale at this restore point" >&2
+        grep "Cannot rename" "$errf" >&2 || true
+        rm -f "$errf"
+        return 0
+    fi
     grep -v 'Removing leading' "$errf" >&2 || true
     rm -f "$errf"
     return 1
