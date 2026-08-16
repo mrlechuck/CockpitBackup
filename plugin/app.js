@@ -309,7 +309,7 @@ function levelBadge(item) {
         tip = "Baseline: the full backup that opens an incremental chain; Delta backups build on it.";
     } else {
         text = "Full"; cls = "level-full";
-        tip = "Full backup: a complete, self-contained archive (no Delta depends on it).";
+        tip = "Full backup: a complete, self-contained archive.";
     }
     const badge = document.createElement("span");
     badge.className = "level-badge " + cls;
@@ -819,6 +819,13 @@ function archiveRow(item) {
         : "Stored on the local destination disk"));
     const lvl = levelBadge(item);
     if (lvl) badges.appendChild(lvl);
+    if (item.consolidated) {
+        const cons = document.createElement("span");
+        cons.className = "level-badge level-consolidated";
+        cons.textContent = "Consolidated";
+        cons.dataset.tooltip = "Rebuilt from a finished chain: the complete folder state at this point, kept by your retention policy.";
+        badges.appendChild(cons);
+    }
     if (item.trigger === "catchup") {
         const info = document.createElement("span");
         info.className = "catchup-info";

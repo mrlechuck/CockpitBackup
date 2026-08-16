@@ -432,6 +432,10 @@ select { cursor: pointer; }
     background: color-mix(in srgb, var(--delta) 20%, transparent);
     color: var(--delta);
 }
+.level-consolidated {
+    background: color-mix(in srgb, var(--incr) 18%, transparent);
+    color: var(--incr);
+}
 
 /* Mode badge on config rows: Standard (green) or Incremental (violet) */
 .mode-badge {
