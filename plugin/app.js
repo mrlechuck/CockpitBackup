@@ -302,12 +302,15 @@ function levelBadge(item) {
     if (item.level === 1) {
         text = "Delta"; cls = "level-delta";
         tip = "Delta: only the changes since the previous backup. Restore recombines the whole chain automatically.";
-    } else if (item.level === 0) {
+    } else if (item.level === 0 && archives.some(a =>
+            a.name !== item.name && (a.chain === item.name || a.base === item.name))) {
+        // A level-0 archive is only a Baseline while Deltas actually build on
+        // it — consolidated points and fresh chain starts are just Fulls.
         text = "Baseline"; cls = "level-baseline";
         tip = "Baseline: the full backup that opens an incremental chain; its Delta backups build on it.";
     } else {
         text = "Full"; cls = "level-full";
-        tip = "Full backup: a complete, self-contained archive (not part of an incremental chain).";
+        tip = "Full backup: a complete, self-contained archive (no Delta depends on it).";
     }
     const badge = document.createElement("span");
     badge.className = "level-badge " + cls;
