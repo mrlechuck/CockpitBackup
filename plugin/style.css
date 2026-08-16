@@ -20,6 +20,7 @@
     --delta: #d6336c;
     --full: #0d9488;
     --local: #b45309;
+    --consolidated: #65a30d;
     --success-hover: #2f6929;
     --warning: #dc9a00;
     --warning-hover: #b57f00;
@@ -54,6 +55,7 @@
         --delta: #f472a3;
         --full: #2dd4bf;
         --local: #f59e0b;
+        --consolidated: #a3e635;
         --success-hover: #6fbd5f;
         --warning: #f0ab00;
         --warning-hover: #ffc02b;
@@ -433,8 +435,8 @@ select { cursor: pointer; }
     color: var(--delta);
 }
 .level-consolidated {
-    background: color-mix(in srgb, var(--incr) 18%, transparent);
-    color: var(--incr);
+    background: color-mix(in srgb, var(--consolidated) 18%, transparent);
+    color: var(--consolidated);
 }
 
 /* Mode badge on config rows: Standard (green) or Incremental (violet) */
@@ -460,8 +462,8 @@ select { cursor: pointer; }
     color: var(--incr);
 }
 .mode-consolidate {
-    background: color-mix(in srgb, var(--incr) 18%, transparent);
-    color: var(--incr);
+    background: color-mix(in srgb, var(--consolidated) 18%, transparent);
+    color: var(--consolidated);
 }
 
 .field-hint {
