@@ -7,6 +7,9 @@ set -euo pipefail
 
 command -v python3 >/dev/null || { echo "python3 è richiesto ma non è installato" >&2; exit 1; }
 command -v tar >/dev/null || { echo "tar è richiesto ma non è installato" >&2; exit 1; }
+# Optional but worth it on multi-core boards: parallel gzip for backups,
+# consolidation and restores (auto-detected at runtime)
+command -v pigz >/dev/null || echo "Suggerimento: 'apt install pigz' rende compressione/decompressione ~4x più veloci (opzionale)"
 [ -d /usr/share/cockpit ] || { echo "Cockpit non sembra installato (/usr/share/cockpit mancante)" >&2; exit 1; }
 
 SRC="$(cd "$(dirname "$0")" && pwd)"

@@ -56,6 +56,9 @@ folder**, each with its own schedule, right from the web interface:
 - Linux with Cockpit installed (Debian/Ubuntu: `apt install cockpit` — Fedora/RHEL: `dnf install cockpit`)
 - `python3`, `tar`, `systemd` (preinstalled on every modern distro)
 - `aws` CLI (only for S3 remote storage — Debian/Ubuntu: `apt install awscli`)
+- `pigz` (optional, recommended: parallel gzip, used automatically when present —
+  makes backups, consolidation and restores ~4× faster on multi-core boards —
+  Debian/Ubuntu: `apt install pigz`)
 
 ## Installation
 
