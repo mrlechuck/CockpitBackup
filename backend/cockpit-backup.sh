@@ -1163,6 +1163,7 @@ for p in glob.glob(os.path.join(dest, "backup-*.tar.gz")):
         "level": meta.get("level"),
         "base": meta.get("base"),
         "chain": meta.get("chain"),
+        "consolidated": bool(meta.get("consolidated")),
     })
 
 # Remote archives: meta stubs without a local file
@@ -1181,6 +1182,7 @@ for mp in glob.glob(os.path.join(dest, "backup-*.tar.gz.meta")):
         "level": meta.get("level"),
         "base": meta.get("base"),
         "chain": meta.get("chain"),
+        "consolidated": bool(meta.get("consolidated")),
     })
 
 archives.sort(key=lambda x: x["mtime"], reverse=True)
