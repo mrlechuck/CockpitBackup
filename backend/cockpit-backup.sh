@@ -1454,13 +1454,64 @@ cmd_restore() {
 }
 
 # Extract one chain member into WORK, repairing GNU tar's fragile rename
-# replay. Apps that rotate directories (radarr's MediaCover: rm B; mv A B)
-# make tar record a rename it then cannot replay — "Cannot rename 'A' to 'B':
-# Directory not empty" — because the stale target still exists in the tree.
-# That stale directory is exactly what the rename replaces, so drop it and
-# re-run the member (bounded retries; any other error fails normally).
+# replay. Apps that rotate directories (plex bundles, radarr MediaCover:
+# rm B; mv A B) make tar record a rename it then cannot replay — "Cannot
+# rename 'A' to 'B': Directory not empty" — because the stale target still
+# exists in the tree.
+#
+# The repair must happen BEFORE extraction, in one pass: re-running a member
+# after a partial replay is NOT idempotent (renames already performed fail
+# differently on the rerun, and two conflicting renames alternate forever).
+# So the member's recorded renames (R/T pairs in its GNU dumpdirs) are parsed
+# up front and every stale target is cleared, then tar runs once. Targets that
+# are themselves rename sources (swap chains) are left to tar's own temp-name
+# mechanism, which replays them fine.
 extract_member() {   # SRC WORKDIR
-    local src="$1" work="$2" tries=0 errf to
+    local src="$1" work="$2" tries=0 errf to cleared=""
+    python3 - "$src" "$work" <<'PY' || true
+import os, shutil, sys, tarfile
+src, work = sys.argv[1], sys.argv[2]
+pairs = []
+try:
+    tf = tarfile.open(src, "r:gz")
+    for m in tf:
+        # GNU dumpdir typeflag is 'D' (tarfile has no named constant for it)
+        if m.type != b"D" or m.size <= 0 or m.size > (50 << 20):
+            continue
+        tf.fileobj.seek(m.offset_data)
+        data = tf.fileobj.read(m.size)
+        prev = None
+        for ent in data.split(b"\0"):
+            if not ent:
+                continue
+            c, val = ent[:1], ent[1:].decode("utf-8", "replace")
+            if c == b"R":
+                prev = val
+            elif c == b"T" and prev is not None:
+                pairs.append((prev, val))
+                prev = None
+            else:
+                prev = None
+    tf.close()
+except Exception:
+    pass
+sources = {f for f, t in pairs}
+workreal = os.path.realpath(work)
+for f, t in pairs:
+    if not t or t.startswith("/") or ".." in t.split("/"):
+        continue
+    if t in sources:      # swap/chain: tar's temp-name replay handles it
+        continue
+    tgt = os.path.join(work, t)
+    if os.path.isdir(tgt) and not os.path.islink(tgt) \
+       and os.path.exists(os.path.join(work, f)) \
+       and os.path.realpath(os.path.dirname(tgt)).startswith(workreal):
+        try:
+            shutil.rmtree(tgt)
+            sys.stderr.write("note: cleared stale rename target '%s'\n" % t)
+        except OSError:
+            pass
+PY
     errf=$(mktemp) || return 1
     while :; do
         if gzip -dc "$src" | LC_ALL=C tar -xf - -C "$work" --listed-incremental=/dev/null 2> "$errf"; then
@@ -1468,8 +1519,10 @@ extract_member() {   # SRC WORKDIR
             rm -f "$errf"
             return 0
         fi
+        # Last-resort single-shot repairs for anything the pre-clean missed;
+        # a target seen twice means we're not converging — stop.
         tries=$((tries + 1))
-        [ "$tries" -le 10 ] || break
+        [ "$tries" -le 5 ] || break
         to=$(python3 - "$errf" <<'PY' || true
 import re, sys
 for line in open(sys.argv[1], errors="replace"):
@@ -1481,7 +1534,9 @@ for line in open(sys.argv[1], errors="replace"):
 PY
 )
         case "$to" in ''|/*|*..*) break ;; esac
+        case " $cleared " in *" $to "*) break ;; esac
         [ -d "$work/$to" ] || break
+        cleared="$cleared $to"
         echo "note: clearing stale directory '$to' left by a recorded rename, retrying" >&2
         rm -rf "$work/$to"
     done
