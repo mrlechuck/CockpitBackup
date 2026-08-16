@@ -1134,9 +1134,11 @@ EOF
 
 cmd_list() {
     # Housekeeping: drop Download-cache entries (fetched S3 copies, combined
-    # delta archives, leftover build dirs) once stale
+    # delta archives, leftover build dirs) once stale, plus consolidate/restore
+    # work dirs orphaned by a hard kill (generous age: they can run long)
     find "$FETCH_DIR" -maxdepth 1 -type f -mmin +60 -delete 2>/dev/null || true
     find "$FETCH_DIR" -maxdepth 1 -name '.build.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+    find "$REMOTE_TMP" -maxdepth 1 \( -name '.consolidate.*' -o -name '.restore.*' \) -type d -mmin +720 -exec rm -rf {} + 2>/dev/null || true
     python3 -c '
 import json, os, glob, sys, shutil
 dest = sys.argv[1]
@@ -1398,7 +1400,10 @@ cmd_restore() {
         cur="$base"
     done
 
-    RESTORE_TMPD=$(mktemp -d)
+    # Destination disk, not /tmp: downloading a large S3 member into a tmpfs
+    # /tmp can run out of space
+    mkdir -p "$REMOTE_TMP"
+    RESTORE_TMPD=$(mktemp -d "$REMOTE_TMP/.restore.XXXXXX")
     local M=${#members[@]} idx=0 n a src usize
     [ "$M" -gt 1 ] && echo "Incremental archive: restoring its chain of $M backups …"
     exec 4>&1   # save restore stdout so the byte counter can emit @@P@@ progress to it
@@ -1731,7 +1736,10 @@ consolidate_one_chain() {   # FOLDER CHAIN PLAN_LINE...
     $need || return 0
 
     echo "Consolidating chain $chain of $folder (retention-selected points) …"
-    local tmpd; tmpd=$(mktemp -d) || return 1
+    # Work on the destination disk: /tmp is often a small tmpfs (RAM) and a big
+    # chain (downloaded members + extracted tree + synthetic full) won't fit
+    mkdir -p "$REMOTE_TMP"
+    local tmpd; tmpd=$(mktemp -d "$REMOTE_TMP/.consolidate.XXXXXX") || return 1
     local work="$tmpd/tree"; mkdir -p "$work"
     local -a made=() replaced=()
     local src ok=true stamp sname synth usize size_b
