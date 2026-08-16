@@ -1741,10 +1741,37 @@ consolidate_one_chain() {   # FOLDER CHAIN PLAN_LINE...
     mkdir -p "$REMOTE_TMP"
     local tmpd; tmpd=$(mktemp -d "$REMOTE_TMP/.consolidate.XXXXXX") || return 1
     local work="$tmpd/tree"; mkdir -p "$work"
+
+    # Live progress for the UI, same server-side files the backup strip uses —
+    # it survives page reloads and clears when the work really ends. A heartbeat
+    # keeps the timestamp fresh through long member downloads/uploads (the UI
+    # hides entries whose ts goes stale).
+    P_FOLDER="$folder"; P_STEP=1; P_STEPS=1
+    progress_set "$slug" consolidate 0 "" "preparing"
+    ( while sleep 25; do
+          python3 - "$PROGRESS_DIR/$slug.json" <<'PY' 2>/dev/null || exit 0
+import json, sys, time
+try:
+    p = sys.argv[1]
+    d = json.load(open(p))
+    d["ts"] = int(time.time())
+    json.dump(d, open(p, "w"))
+except Exception:
+    raise SystemExit(1)
+PY
+      done ) & local hb=$!
+    consolidate_progress_end() {
+        kill "$hb" 2>/dev/null || true
+        progress_clear "$slug"
+    }
+
+    local total=${#order[@]} idx=0
     local -a made=() replaced=()
     local src ok=true stamp sname synth usize size_b
     for e in "${order[@]}"; do
         IFS='|' read -r act lvl mt rmt name <<< "$e"
+        idx=$((idx + 1))
+        progress_set "$slug" consolidate $(( (idx - 1) * 100 / total )) "" "member $idx of $total"
         if [ -f "$DEST/$name" ]; then
             src="$DEST/$name"
         elif [ "$rmt" = "1" ]; then
@@ -1785,6 +1812,7 @@ consolidate_one_chain() {   # FOLDER CHAIN PLAN_LINE...
     done
 
     if ! $ok; then
+        consolidate_progress_end
         for e in ${made[@]+"${made[@]}"}; do
             IFS='|' read -r sname rmt <<< "$e"
             [ "$rmt" = "1" ] && s3_delete_remote "$sname"
@@ -1794,6 +1822,7 @@ consolidate_one_chain() {   # FOLDER CHAIN PLAN_LINE...
         echo "consolidate: chain $chain left intact (a step failed)" >&2
         return 1
     fi
+    progress_set "$slug" consolidate 99 "" "finishing"
     rm -rf "$tmpd"
     local cnt=0
     for e in ${replaced[@]+"${replaced[@]}"}; do
@@ -1802,6 +1831,7 @@ consolidate_one_chain() {   # FOLDER CHAIN PLAN_LINE...
         rm -f "$DEST/$name" "$DEST/$name.meta"
         cnt=$((cnt + 1))
     done
+    consolidate_progress_end
     echo "Chain consolidated: ${#made[@]} synthetic full(s) kept, $cnt archives removed."
     log_line "$folder" "consolidate" "Chain consolidated per retention: ${#made[@]} synthetic full(s), $cnt archives removed"
 }

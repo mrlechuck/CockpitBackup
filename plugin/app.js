@@ -476,12 +476,14 @@ function formatDuration(s) {
  * When there's no percentage yet (scan without a baseline, or an indeterminate
  * archive), it falls back to the phase + detail. */
 function progressText(r) {
-    const labels = { scan: "Scanning", archive: "Backing up", upload: "Uploading to S3" };
+    const labels = { scan: "Scanning", archive: "Backing up", upload: "Uploading to S3",
+                     consolidate: "Consolidating" };
     let s = labels[r.phase] || "Working";
     if (r.steps > 1) s += " (" + (r.step || 1) + " of " + r.steps + ")";
     if (typeof r.pct === "number") {
         s += " · " + r.pct + "%";
         if (typeof r.eta === "number") s += " · ETA " + formatDuration(r.eta);
+        if (r.detail) s += " · " + r.detail;
     } else if (r.detail) {
         s += " · " + r.detail;
     } else {
