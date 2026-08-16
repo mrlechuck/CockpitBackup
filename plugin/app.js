@@ -21,7 +21,7 @@ if (typeof cockpit === "undefined") {
                 { folder: "/home/roberto/documents", every_hours: 1, enabled: true,
                   retention: [{ keep: 1, per: "hour", span: 24 }, { keep: 1, per: "day", span: 7 },
                               { keep: 1, per: "week", span: 4 }, { keep: 1, per: "month", span: 12 }] },
-                { folder: "/var/www", time: "03:00", enabled: false, excludes: ["cache", "*.log"], title: "Web sites", mode: "incremental", full_every: 7,
+                { folder: "/var/www", time: "03:00", enabled: false, excludes: ["cache", "*.log"], title: "Web sites", mode: "incremental", full_every: 7, consolidate: true,
                   retention: { daily: { keep: 2, days: 7 }, weekly: { keep: 1, weeks: 4 },
                                monthly: { keep: 1, months: 12 }, yearly: { keep: 1, years: 5 } } }
             ]
@@ -606,6 +606,13 @@ function configRow(b, idx) {
         mb.dataset.tooltip = "Standard backups: a full, self-contained archive every time";
     }
     path.appendChild(mb);
+    if (b.mode === "incremental" && b.consolidate) {
+        const cb = document.createElement("span");
+        cb.className = "mode-badge mode-consolidate";
+        cb.textContent = "Consolidation";
+        cb.dataset.tooltip = "Finished chains are consolidated: only the restore points your retention selects are kept, each as a standalone Full.";
+        path.appendChild(cb);
+    }
 
     const meta = document.createElement("span");
     meta.className = "config-meta muted";

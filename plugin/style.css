@@ -459,6 +459,10 @@ select { cursor: pointer; }
     background: color-mix(in srgb, var(--incr) 18%, transparent);
     color: var(--incr);
 }
+.mode-consolidate {
+    background: color-mix(in srgb, var(--incr) 18%, transparent);
+    color: var(--incr);
+}
 
 .field-hint {
     font-size: 12px;
