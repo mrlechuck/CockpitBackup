@@ -438,6 +438,13 @@ select { cursor: pointer; }
     background: color-mix(in srgb, var(--consolidated) 18%, transparent);
     color: var(--consolidated);
 }
+/* Plain-text note (no pill) on chain members awaiting removal by consolidation —
+ * same muted look as the Age column ("yesterday", "2 days ago") */
+.removal-note {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
 
 /* Mode badge on config rows: Standard (green) or Incremental (violet) */
 .mode-badge {

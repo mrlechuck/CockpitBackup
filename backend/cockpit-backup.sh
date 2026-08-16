@@ -119,6 +119,11 @@ REMOTE_TMP="$DEST/.tmp"
 SNAR_DIR="$DEST/.snar"
 PROGRESS_DIR="$DEST/.progress"
 
+# Parallel (de)compression when pigz is installed: plain gzip is single-threaded
+# and dominates archive/synthetic build times on multi-core boards (a Pi 5 has
+# 4 cores — pigz cuts compression time roughly 4×). Output stays gzip-compatible.
+if command -v pigz >/dev/null 2>&1; then GZ_C=pigz; GZ_D="pigz -dc"; else GZ_C=gzip; GZ_D="gzip -dc"; fi
+
 # ---------- tar byte-counter progress ----------
 # tar's --checkpoint output proved unreliable to capture across environments, so
 # progress is measured with an inline byte counter piped between tar and gzip
@@ -658,7 +663,7 @@ PYEOF
             2> >(grep -v 'Removing leading' >&2 || true) \
         | python3 "$cpy" file "$den" "$archive_start" \
             "$PROGRESS_DIR/$slug.json" "$P_FOLDER" "${P_STEP:-1}" "${P_STEPS:-1}" \
-        | gzip > "$tmp"
+        | $GZ_C > "$tmp"
 
     local size_h size_b dur tar_dur
     size_h=$(du -h "$tmp" | cut -f1)
@@ -1436,13 +1441,14 @@ cmd_restore() {
         local -a xargs=(-xf - -C "$target")
         [ "$M" -gt 1 ] && xargs+=(--listed-incremental=/dev/null)
         # gzip → byte counter (emits @@P@@ progress on fd 4 = restore stdout) → tar
-        if ! gzip -dc "$src" \
+        if ! $GZ_D "$src" \
             | python3 "$cpy" emit "$RDEN" "$(date +%s)" "$idx" "$M" 2>&4 \
             | tar "${xargs[@]}" 2> >(grep -v 'Removing leading' >&2 || true); then
             # GNU tar's rename replay can trip over rotated directories —
             # extract_member repairs and retries (no byte progress meanwhile)
             restore_emit extract "$idx" "$M" "" "" "repairing directory renames…"
-            extract_member "$src" "$target" || die "extracting $n failed"
+            local empc=""; [ "$idx" -gt 1 ] || empc="nopreclean"
+            extract_member "$src" "$target" $empc || die "extracting $n failed"
         fi
         [ "$src" = "$DEST/$n" ] || rm -f "$src"
     done
@@ -1466,8 +1472,11 @@ cmd_restore() {
 # up front and every stale target is cleared, then tar runs once. Targets that
 # are themselves rename sources (swap chains) are left to tar's own temp-name
 # mechanism, which replays them fine.
-extract_member() {   # SRC WORKDIR
+extract_member() {   # SRC WORKDIR [nopreclean]
     local src="$1" work="$2" tries=0 errf to cleared=""
+    # Full (level-0) members carry no rename records — callers pass "nopreclean"
+    # to skip the parse pass and its extra decompression of the biggest file.
+    if [ "${3:-}" != "nopreclean" ]; then
     python3 - "$src" "$work" <<'PY' || true
 import os, shutil, sys, tarfile
 src, work = sys.argv[1], sys.argv[2]
@@ -1512,9 +1521,10 @@ for f, t in pairs:
         except OSError:
             pass
 PY
+    fi
     errf=$(mktemp) || return 1
     while :; do
-        if gzip -dc "$src" | LC_ALL=C tar -xf - -C "$work" --listed-incremental=/dev/null 2> "$errf"; then
+        if $GZ_D "$src" | LC_ALL=C tar -xf - -C "$work" --listed-incremental=/dev/null 2> "$errf"; then
             grep -v 'Removing leading' "$errf" >&2 || true
             rm -f "$errf"
             return 0
@@ -1615,13 +1625,14 @@ cmd_fetch() {
 
     mkdir -p "$FETCH_DIR"
     local work; work=$(mktemp -d "$FETCH_DIR/.build.XXXXXX") || die "cannot create the work dir"
-    local m src
+    local m src first=1 pc
     for m in "${members[@]}"; do
         src=$(fetch_raw "$m") || { rm -rf "$work"; die "cannot obtain chain member: $m"; }
-        extract_member "$src" "$work" || { rm -rf "$work"; die "extracting $m failed"; }
+        pc=""; [ "$first" = "1" ] && pc="nopreclean"; first=0
+        extract_member "$src" "$work" $pc || { rm -rf "$work"; die "extracting $m failed"; }
     done
     [ -e "$work/$rel" ] || { rm -rf "$work"; die "combined tree is empty ($rel)"; }
-    tar -cf - -C "$work" "$rel" 2>/dev/null | gzip > "$combined.part" \
+    tar -cf - -C "$work" "$rel" 2>/dev/null | $GZ_C > "$combined.part" \
         || { rm -rf "$work"; rm -f "$combined.part"; die "building the combined archive failed"; }
     rm -rf "$work"
     gzip -t "$combined.part" 2>/dev/null || { rm -f "$combined.part"; die "combined archive failed the integrity check"; }
@@ -1836,14 +1847,16 @@ PY
         else
             ok=false; break
         fi
-        extract_member "$src" "$work" || { ok=false; break; }
+        local pc=""
+        [ "$lvl" = "1" ] || pc="nopreclean"
+        extract_member "$src" "$work" $pc || { ok=false; break; }
         [ "$src" = "$DEST/$name" ] || rm -f "$src"
 
         if [ "$act" = "KEEP" ] && [ "$lvl" = "1" ]; then
             stamp=$(printf '%s' "$name" | sed -E 's/^backup-.*-([0-9]{8}-[0-9]{6})-(incr|full)\.tar\.gz$/\1/')
             sname="backup-$slug-$stamp-full.tar.gz"
             synth="$tmpd/$sname"
-            tar -cf - -C "$work" "$rel" 2>/dev/null | gzip > "$synth" || { ok=false; break; }
+            tar -cf - -C "$work" "$rel" 2>/dev/null | $GZ_C > "$synth" || { ok=false; break; }
             { gzip -t "$synth" 2>/dev/null && [ -s "$synth" ]; } || { ok=false; break; }
             usize=$(du -sb "$work/$rel" 2>/dev/null | cut -f1)
             case "$usize" in ''|*[!0-9]*) usize=0 ;; esac

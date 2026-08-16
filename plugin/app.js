@@ -835,6 +835,23 @@ function archiveRow(item) {
         cons.dataset.tooltip = "Rebuilt from a finished chain: the complete folder state at this point, kept by your retention policy.";
         badges.appendChild(cons);
     }
+    // While this folder is being consolidated, mark the finished chain's Deltas:
+    // they all go away when the pass completes (dropped, or replaced by their
+    // standalone consolidated Full).
+    if (item.level === 1 &&
+            running.some(r => r.folder === item.folder && r.phase === "consolidate")) {
+        const newestBase = archives
+            .filter(a => a.folder === item.folder && a.level === 0 && !a.consolidated)
+            .sort((a, b) => b.mtime - a.mtime)[0];
+        const activeChain = newestBase ? (newestBase.chain || newestBase.name) : null;
+        if (item.chain !== activeChain) {
+            const rm = document.createElement("span");
+            rm.className = "removal-note";
+            rm.textContent = "will be removed";
+            rm.dataset.tooltip = "This chain is being consolidated: once its retention-selected points are stored as standalone Fulls, this Delta is deleted.";
+            badges.appendChild(rm);
+        }
+    }
     if (item.trigger === "catchup") {
         const info = document.createElement("span");
         info.className = "catchup-info";
