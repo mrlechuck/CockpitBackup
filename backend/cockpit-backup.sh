@@ -1145,7 +1145,7 @@ cmd_list() {
     find "$FETCH_DIR" -maxdepth 1 -name '.build.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
     find "$REMOTE_TMP" -maxdepth 1 \( -name '.consolidate.*' -o -name '.restore.*' \) -type d -mmin +720 -exec rm -rf {} + 2>/dev/null || true
     python3 -c '
-import json, os, glob, sys, shutil
+import json, os, glob, sys
 dest = sys.argv[1]
 
 def read_meta(path):
@@ -1224,8 +1224,10 @@ p = dest
 while p and not os.path.exists(p):
     p = os.path.dirname(p)
 try:
-    du = shutil.disk_usage(p or "/")
-    disk = {"free": du.free, "total": du.total}
+    # Gross free blocks (f_bfree), not the non-root f_bavail: the Cockpit
+    # storage pages report the whole disk free space, so match that figure
+    st = os.statvfs(p or "/")
+    disk = {"free": st.f_bfree * st.f_frsize, "total": st.f_blocks * st.f_frsize}
 except Exception:
     disk = None
 
